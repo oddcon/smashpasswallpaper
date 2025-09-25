@@ -1,0 +1,348 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Bing Wallpapers — Swipe Save</title>
+<style>
+  :root { --bg:#0b0f14; --fg:#e6e9ef; --muted:#9aa4b2; --accent:#3b82f6; --danger:#ef4444; --ok:#22c55e; }
+  html,body { height:100%; margin:0; background:var(--bg); color:var(--fg); font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Inter,Arial,sans-serif; }
+  header { display:flex; gap:.75rem; flex-wrap:wrap; align-items:center; padding:12px 16px; border-bottom:1px solid #1c2530; position:sticky; top:0; background:linear-gradient(#0b0f14,rgba(11,15,20,.85)); backdrop-filter:saturate(1.2) blur(6px); z-index:10; }
+  header h1 { margin:0; font-size:16px; font-weight:600; color:var(--muted); }
+  label { font-size:14px; color:var(--muted); }
+  input[type="number"] { width:7.5rem; padding:8px 10px; background:#0e141b; color:var(--fg); border:1px solid #233041; border-radius:8px; }
+  button { appearance:none; border:1px solid #233041; background:#0e141b; color:var(--fg); padding:10px 14px; border-radius:10px; font-weight:600; cursor:pointer; }
+  button.primary { border-color:transparent; background:var(--accent); color:white; }
+  button.good { background:var(--ok); border-color:transparent; color:#06220f; }
+  button.bad { background:var(--danger); border-color:transparent; color:#220606; }
+  button:disabled { opacity:.5; cursor:not-allowed; }
+  #stage { position:relative; height:calc(100% - 66px); display:grid; place-items:center; overflow:hidden; }
+  .card { position:absolute; width:min(92vw, 1100px); height:min(70vh, 72vw); background:#0e141b; border:1px solid #233041; border-radius:18px; overflow:hidden; box-shadow:0 16px 40px rgba(0,0,0,.35); touch-action:pan-y; user-select:none; }
+  .card img { width:100%; height:100%; object-fit:cover; background:#0b0f14; display:block; }
+  .meta { position:absolute; left:0; right:0; bottom:0; padding:10px 12px; background:linear-gradient(transparent, rgba(0,0,0,.65)); font-size:14px; }
+  .meta strong { font-weight:700; }
+  .hud { position:fixed; bottom:14px; left:50%; transform:translateX(-50%); display:flex; gap:10px; z-index:20; }
+  .hud button { padding:14px 18px; font-size:14px; }
+  .progress { font-size:12px; color:var(--muted); margin-left:auto; }
+  .pill { display:inline-block; padding:4px 8px; border-radius:999px; background:#132030; border:1px solid #233041; color:#b9c3d0; font-size:12px; margin-left:8px; }
+  .tip { font-size:12px; color:var(--muted); margin-left:8px; }
+  .toast { position:fixed; top:12px; right:12px; background:#111826; border:1px solid #233041; color:#dbe2ea; padding:10px 12px; border-radius:10px; font-size:13px; z-index:30; display:none; }
+  @media (max-width:600px){
+    header { padding:10px; }
+    .hud { bottom:10px; gap:8px; }
+    .hud button { padding:12px 14px; }
+  }
+</style>
+</head>
+<body>
+  <header>
+    <h1>Swipe to Save</h1>
+    <label>Year <input id="year" type="number" min="2009" max="2099" step="1" /></label>
+    <button id="load" class="primary">Load</button>
+    <span class="progress" id="progress">0 / 0</span>
+    <span class="pill" id="savedCount">Saved: 0</span>
+    <span class="tip">Keys: ← Pass, → Save, Z undo, D download zip</span>
+  </header>
+
+  <div id="stage"></div>
+
+  <div class="hud">
+    <button id="passBtn"  class="bad">Pass</button>
+    <button id="saveBtn"  class="good">Save</button>
+    <button id="zipBtn"   class="primary">Download ZIP</button>
+  </div>
+
+  <div id="toast" class="toast"></div>
+
+  <!-- JSZip + FileSaver for client-side ZIP -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js" integrity="sha512-4npT0Ckq6Wn4yZ6sO2kX6NnXcNmC9mYz9K2l1H8eN1bD1Cz9+G9g2+6O3W8X3sJqXzVQq+g8Tn0qRk6Uq9xjYw==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js" integrity="sha512-5x3nHq7pQ7mGvQH1M8q1Uo1C8UjXJb7U2H6r9dR9yH0lU9q4G9r1y1bB2x0oKQ+8eJmT8r7xG2lQf9H4iGZ0cA==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+
+  <script>
+  // ---- Config ----
+  const API_BASE = 'https://bing.npanuhin.me/US/en.json'; // main endpoint
+  const MAX_PARALLEL_FETCH = 6; // throttling for zipping
+
+  // ---- State ----
+  let items = [];       // [{date, title, copyright, url}]
+  let idx = 0;
+  let saved = [];       // subset of items user saved
+  let historyStack = []; // [{item, action:'save'|'pass'}]
+  const stage = document.getElementById('stage');
+  const progressEl = document.getElementById('progress');
+  const savedCountEl = document.getElementById('savedCount');
+  const toastEl = document.getElementById('toast');
+
+  // ---- UI helpers ----
+  function toast(msg, ms=1800){ toastEl.textContent = msg; toastEl.style.display='block'; clearTimeout(toastEl._t); toastEl._t=setTimeout(()=>toastEl.style.display='none', ms); }
+  function updateHUD(){ progressEl.textContent = `${Math.min(idx, items.length)} / ${items.length}`; savedCountEl.textContent = `Saved: ${saved.length}`; }
+
+  function cardFor(item){
+    const card = document.createElement('div');
+    card.className = 'card';
+    card.dataset.date = item.date;
+    const img = document.createElement('img');
+    img.loading = 'eager';
+    img.decoding = 'async';
+    img.src = item.url;
+    img.alt = item.title || item.copyright || item.date;
+    const meta = document.createElement('div');
+    meta.className = 'meta';
+    meta.innerHTML = `<strong>${escapeHtml(item.title || 'Bing Wallpaper')}</strong> · ${escapeHtml(item.date)}${item.copyright ? ` · ${escapeHtml(item.copyright)}`:''}`;
+    card.appendChild(img); card.appendChild(meta);
+    // drag/swipe
+    enableSwipe(card, {
+      onSwipeLeft:  () => actPass(),
+      onSwipeRight: () => actSave(),
+    });
+    return card;
+  }
+
+  function escapeHtml(s){ return (s||'').replace(/[&<>"]/g,c=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c])); }
+
+  function renderNext(){
+    stage.innerHTML = '';
+    if(idx >= items.length){ toast('End of list'); updateHUD(); return; }
+    const card = cardFor(items[idx]);
+    stage.appendChild(card);
+    updateHUD();
+    // prefetch next image to keep flow fast
+    const next = items[idx+1];
+    if(next){ const pre = new Image(); pre.src = next.url; }
+  }
+
+  // ---- Swipe engine ----
+  function enableSwipe(el, {onSwipeLeft, onSwipeRight}){
+    let startX=0, startY=0, currentX=0, dragging=false;
+    const threshold = Math.max(80, Math.min(window.innerWidth*0.15, 160));
+    const onStart = (x,y)=>{ dragging=true; startX=x; startY=y; el.style.transition='none'; };
+    const onMove  = (x,y)=>{
+      if(!dragging) return;
+      currentX = x - startX;
+      const rot = currentX/20;
+      el.style.transform = `translate(${currentX}px, ${y-startY}px) rotate(${rot}deg)`;
+      el.style.opacity = String(Math.max(0.4, 1 - Math.abs(currentX)/(threshold*2)));
+    };
+    const onEnd = ()=>{
+      if(!dragging) return;
+      el.style.transition='transform .18s ease, opacity .18s ease';
+      if(currentX > threshold){ el.style.transform='translate(120vw,0) rotate(12deg)'; setTimeout(onSwipeRight,120); }
+      else if(currentX < -threshold){ el.style.transform='translate(-120vw,0) rotate(-12deg)'; setTimeout(onSwipeLeft,120); }
+      else { el.style.transform='translate(0,0) rotate(0)'; el.style.opacity='1'; }
+      dragging=false; currentX=0;
+    };
+    el.addEventListener('pointerdown', e=>{ if(e.button===0){el.setPointerCapture(e.pointerId); onStart(e.clientX,e.clientY);} });
+    el.addEventListener('pointermove', e=>onMove(e.clientX,e.clientY));
+    el.addEventListener('pointerup', onEnd);
+    el.addEventListener('pointercancel', onEnd);
+  }
+
+  // ---- Actions ----
+  function actSave(){
+    if(idx >= items.length) return;
+    const item = items[idx];
+    saved.push(item);
+    historyStack.push({item, action:'save'});
+    idx++;
+    renderNext();
+  }
+  function actPass(){
+    if(idx >= items.length) return;
+    const item = items[idx];
+    historyStack.push({item, action:'pass'});
+    idx++;
+    renderNext();
+  }
+  function actUndo(){
+    const last = historyStack.pop();
+    if(!last) return;
+    idx = Math.max(0, idx-1);
+    if(last.action==='save'){ // remove last occurrence
+      const i = saved.findIndex(x=>x.date===last.item.date && x.url===last.item.url);
+      if(i>-1) saved.splice(i,1);
+    }
+    renderNext();
+  }
+
+  // ---- Data loading ----
+  document.getElementById('load').addEventListener('click', loadYear);
+  document.getElementById('saveBtn').addEventListener('click', actSave);
+  document.getElementById('passBtn').addEventListener('click', actPass);
+  document.getElementById('zipBtn').addEventListener('click', downloadZip);
+  document.getElementById('year').value = new Date().getFullYear();
+
+  document.addEventListener('keydown', e=>{
+    if(e.key==='ArrowRight') actSave();
+    else if(e.key==='ArrowLeft') actPass();
+    else if(e.key.toLowerCase()==='z') actUndo();
+    else if(e.key.toLowerCase()==='d') downloadZip();
+  });
+
+  async function loadYear(){
+    const y = Number(document.getElementById('year').value);
+    if(!y || y<2009 || y>2099){ toast('Enter valid year'); return; }
+    toast('Loading…');
+    items = []; idx=0; saved=[]; historyStack=[]; updateHUD(); stage.innerHTML='';
+    // Strategy:
+    // 1) Try master list: API_BASE?year=YYYY → expect array of entries
+    // 2) If not, iterate dates Jan 1..Dec 31 → API_BASE?date=YYYY-MM-DD
+    // 3) Normalize to {date,title,copyright,url}
+    let list = await tryFetchList(y);
+    if(!list || !list.length){
+      list = await fetchDailyFallback(y);
+    }
+    items = normalizeList(list, y).filter(x=>!!x.url);
+    // De-dup, sort by date
+    const seen = new Set();
+    items = items.filter(it=>{ const k=it.date+'|'+it.url; if(seen.has(k)) return false; seen.add(k); return true; })
+                 .sort((a,b)=> a.date.localeCompare(b.date));
+    if(!items.length){ toast('No images found for year'); updateHUD(); return; }
+    toast(`Loaded ${items.length}`);
+    renderNext();
+  }
+
+  async function tryFetchList(year){
+    try{
+      // Attempt 1: ?year=YYYY
+      const r1 = await fetch(`${API_BASE}?year=${year}`, {mode:'cors'});
+      if(r1.ok){ const j = await r1.json(); if(Array.isArray(j) || j.images) return j; }
+    }catch{}
+    try{
+      // Attempt 2: /YYYY.json (some mirrors expose this)
+      const u = new URL(API_BASE);
+      const base = u.origin + u.pathname.replace(/\/[^\/]*$/,''); // strip filename
+      const r2 = await fetch(`${base}/${year}.json`, {mode:'cors'});
+      if(r2.ok){ const j = await r2.json(); if(Array.isArray(j) || j.images) return j; }
+    }catch{}
+    return null;
+  }
+
+  async function fetchDailyFallback(year){
+    const results = [];
+    const start = new Date(Date.UTC(year,0,1));
+    const end = new Date(Date.UTC(year,11,31));
+    const urls = [];
+    // Try ?date=YYYY-MM-DD pattern
+    for(let d=new Date(start); d<=end; d.setUTCDate(d.getUTCDate()+1)){
+      const iso = d.toISOString().slice(0,10);
+      urls.push(`${API_BASE}?date=${iso}`);
+    }
+    // Fetch with limited concurrency
+    let i = 0;
+    async function worker(){
+      while(i<urls.length){
+        const my = i++;
+        try{
+          const r = await fetch(urls[my], {mode:'cors'});
+          if(r.ok){
+            const j = await r.json();
+            if(j) results.push(j);
+          }
+        }catch{}
+      }
+    }
+    const workers = Array.from({length:8}, worker);
+    await Promise.all(workers);
+    return results;
+  }
+
+  function normalizeList(raw, year){
+    // Accept shapes:
+    // A) { images:[{startdate, enddate, url, urlbase, copyright, title}] }
+    // B) Array of A or of image objects
+    // C) Single object with those fields
+    const bucket = [];
+    const pushFromImage = (im) => {
+      if(!im) return;
+      // date
+      const d = im.fullstartdate || im.startdate || im.date || '';
+      const dateStr = normalizeDate(d, year);
+      // url candidates
+      let url = null;
+      if(im.url && /^https?:/.test(im.url)) url = im.url;
+      else if(im.hd || im.uhd) url = im.hd || im.uhd;
+      else if(im.url) url = 'https://www.bing.com' + im.url;
+      else if(im.urlbase){
+        url = `https://www.bing.com${im.urlbase}_UHD.jpg`;
+      }
+      // some mirrors expose direct JPG at predictable paths:
+      if(!url && dateStr){
+        try{
+          // https://bing.npanuhin.me/US/en/YYYY/MM/DD.jpg or YYYY-MM-DD.jpg variants
+          url = `https://bing.npanuhin.me/US/en/${dateStr}.jpg`;
+        }catch{}
+      }
+      bucket.push({
+        date: dateStr || `${year}`,
+        title: im.title || im.caption || '',
+        copyright: im.copyright || '',
+        url
+      });
+    };
+    const pushFromBlock = (blk) => {
+      if(!blk) return;
+      if(Array.isArray(blk.images)) blk.images.forEach(pushFromImage);
+      else if(Array.isArray(blk)) blk.forEach(x=>{ if(x.images) x.images.forEach(pushFromImage); else pushFromImage(x); });
+      else if(blk.images) blk.images.forEach(pushFromImage);
+      else pushFromImage(blk);
+    };
+    pushFromBlock(raw);
+    return bucket;
+  }
+
+  function normalizeDate(s, fallbackYear){
+    if(!s) return null;
+    // Handles: YYYYMMDD, YYYY-MM-DD, 20240101T0000, etc.
+    const m = String(s).match(/^(\d{4})[-/]?(\d{2})[-/]?(\d{2})/);
+    if(m) return `${m[1]}-${m[2]}-${m[3]}`;
+    // if only day-of-year or missing, fallback
+    return `${fallbackYear}`;
+  }
+
+  // ---- ZIP download ----
+  async function downloadZip(){
+    if(!saved.length){ toast('No saved images'); return; }
+    toast('Preparing ZIP…');
+    const zip = new JSZip();
+    const queue = saved.map((it, i)=>({it, i}));
+
+    let active = 0, done = 0, p = Promise.resolve();
+    function next(){
+      if(!queue.length) return Promise.resolve();
+      while(active < MAX_PARALLEL_FETCH && queue.length){
+        const {it, i} = queue.shift();
+        active++;
+        p = p.then(()=> fetchImageToZip(it, zip)
+          .catch(()=>{}) // skip failures
+          .then(()=>{ active--; done++; progressEl.textContent = `Zipping ${done}/${saved.length}`; return next(); })
+        );
+      }
+      return p;
+    }
+    await next();
+    const content = await zip.generateAsync({type:'blob'});
+    const y = document.getElementById('year').value || 'year';
+    saveAs(content, `bing-${y}-selected.zip`);
+    updateHUD();
+    toast('ZIP ready');
+  }
+
+  async function fetchImageToZip(it, zip){
+    const url = it.url;
+    if(!url) return;
+    const resp = await fetch(url, {mode:'cors', cache:'force-cache'});
+    if(!resp.ok) return;
+    const blob = await resp.blob();
+    const name = safeName(`${it.date || 'img'}-${(it.title||'').slice(0,64) || 'bing'}.jpg`);
+    zip.file(name, blob);
+  }
+
+  function safeName(s){
+    return s.replace(/[^\w\-\. ]+/g,'_').replace(/\s+/g,' ').trim();
+  }
+
+  // First paint
+  updateHUD();
+  </script>
+</body>
+</html>
