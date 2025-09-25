@@ -14,7 +14,7 @@
   header{padding:12px 16px;display:flex;flex-wrap:wrap;gap:8px;align-items:center;border-bottom:1px solid #1f2430}
   header h1{font-size:16px;margin:0 10px 0 0;white-space:nowrap}
   label{font-size:13px;color:var(--sub)}
-  input,select,button{background:#0f131a;color:var(--text);border:1px solid #2a3242;border-radius:8px;padding:8px 10px;font-size:14px}
+  input,button{background:#0f131a;color:var(--text);border:1px solid #2a3242;border-radius:8px;padding:8px 10px;font-size:14px}
   button{cursor:pointer}
   button.primary{background:var(--accent);border-color:var(--accent);color:#001225}
   button.good{background:var(--ok);border-color:var(--ok);color:#00150b}
@@ -34,6 +34,12 @@
   .badge{position:absolute;top:14px;font-weight:900;font-size:22px;padding:6px 10px;border-radius:8px;border:3px solid;transform:rotate(-10deg);opacity:0}
   .badge.save{left:14px;color:#d7ffe3;border-color:var(--ok);background:rgba(56,193,114,.12)}
   .badge.pass{right:14px;color:#ffd6d6;border-color:var(--no);background:rgba(227,52,47,.12);transform:rotate(10deg)}
+  /* preload overlay */
+  #preloadOverlay{position:fixed;inset:0;background:rgba(10,12,16,.92);display:none;align-items:center;justify-content:center;z-index:5}
+  #preloadBox{width:min(520px,92vw);background:#131823;border:1px solid #2a3242;border-radius:12px;padding:18px}
+  #bar{height:10px;background:#0f131a;border:1px solid #2a3242;border-radius:999px;overflow:hidden;margin-top:10px}
+  #bar>i{display:block;height:100%;width:0;background:var(--accent)}
+  #pct{font-variant-numeric:tabular-nums}
   @media (max-width:640px){ header{gap:6px} .meta{font-size:14px} }
 </style>
 </head>
@@ -56,7 +62,7 @@
 </header>
 
 <div id="stage">
-  <div class="stackhint">Load a year, then swipe the card. Drag right = save. Drag left = pass.</div>
+  <div class="stackhint">Load a year. The app will preload all images, then start.</div>
 </div>
 
 <footer>
@@ -64,10 +70,23 @@
     <button id="passBtn" class="bad" disabled>Pass</button>
     <button id="saveBtn" class="good" disabled>Save</button>
   </div>
-  <div style="font-size:12px;color:var(--sub)">Source: bing.npanuhin.me (Bing Wallpaper Archive). Uses the <code>url</code> field returned by the market JSON.</div>
+  <div style="font-size:12px;color:var(--sub)">Source: bing.npanuhin.me (Bing Wallpaper Archive). Uses the <code>url</code> field from the market JSON.</div>
 </footer>
 
+<!-- Preload overlay -->
+<div id="preloadOverlay">
+  <div id="preloadBox">
+    <div style="display:flex;justify-content:space-between;align-items:end;gap:8px">
+      <div style="font-weight:600">Preloading wallpapers…</div>
+      <div id="pct" class="pill">0/0</div>
+    </div>
+    <div id="bar"><i></i></div>
+    <div id="hint" style="margin-top:8px;color:var(--sub);font-size:13px">Decoding images for instant swipes. Please wait.</div>
+  </div>
+</div>
+
 <script>
+/* endpoints */
 function marketApiURL(market){
   const m = market.trim().replace(/^\/+|\/+$/g,'');
   return [
@@ -76,8 +95,10 @@ function marketApiURL(market){
   ];
 }
 
+/* state */
 const state = { items: [], idx: 0, saved: [], preloaded: new Map() };
 
+/* elements */
 const stage = document.getElementById('stage');
 const loadBtn = document.getElementById('load');
 const passBtn = document.getElementById('passBtn');
@@ -85,35 +106,50 @@ const saveBtn = document.getElementById('saveBtn');
 const dlBtn   = document.getElementById('download');
 const clearBtn= document.getElementById('clear');
 const queueInfo = document.getElementById('queueInfo');
+const overlay = document.getElementById('preloadOverlay');
+const pctEl = document.getElementById('pct');
+const barEl = document.querySelector('#bar>i');
 
+/* ui helpers */
 function fmtDate(s){ try{ return new Date(s).toISOString().slice(0,10) }catch{ return s||'' } }
 function updateCounters(){
   queueInfo.textContent = `${state.items.length} loaded · ${state.idx}/${state.items.length} viewed`;
   dlBtn.textContent = `Download ZIP (${state.saved.length})`;
-  dlBtn.disabled = state.saved.length===0;
-  clearBtn.disabled = state.saved.length===0;
+  const any = state.saved.length>0;
+  dlBtn.disabled = !any; clearBtn.disabled = !any;
   const canAct = state.items.length>0 && state.idx<state.items.length;
   passBtn.disabled = !canAct; saveBtn.disabled = !canAct;
 }
+function escapeHtml(s){ return String(s).replace(/[&<>"']/g, c=>({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]))}
 
-// deeper, smarter preload
-async function preload(i){
-  const AHEAD = 6;
-  for(let k=i; k<i+AHEAD; k++){
-    const it = state.items[k];
-    if(!it) break;
-    if(!state.preloaded.has(it.url)){
-      const img = new Image();
-      img.decoding = 'async';
-      img.referrerPolicy = 'no-referrer';
-      img.src = it.url;
-      img.decode?.().catch(()=>{});
-      state.preloaded.set(it.url,img);
-      const l = document.createElement('link'); l.rel='prefetch'; l.href=it.url; document.head.appendChild(l);
-    }
+/* preload all with concurrency and decode */
+async function preloadAll(list, {concurrency=8, onProgress=()=>{}}={}){
+  overlay.style.display = 'flex';
+  pctEl.textContent = `0/${list.length}`; barEl.style.width = '0%';
+
+  let i = 0, done = 0;
+  async function work(idx){
+    const it = list[idx]; if(!it) return;
+    if(state.preloaded.has(it.url)) { done++; onProgress(done,list.length); return; }
+    const img = new Image();
+    img.decoding = 'async';
+    img.referrerPolicy = 'no-referrer';
+    img.src = it.url;
+    try{ await img.decode(); }catch{}
+    state.preloaded.set(it.url, img);
+    done++; onProgress(done, list.length);
   }
+  function nextIndex(){ return i < list.length ? i++ : null; }
+
+  const workers = Array.from({length: Math.min(concurrency, list.length)}, async ()=>{
+    while(true){ const n = nextIndex(); if(n===null) break; await work(n); }
+  });
+  await Promise.all(workers);
+
+  overlay.style.display = 'none';
 }
 
+/* cards */
 function makeCard(item){
   const card = document.createElement('div');
   card.className = 'card';
@@ -129,16 +165,15 @@ function makeCard(item){
         <button class="good">Save</button>
       </div>
     </div>`;
-  card.querySelector('img').src = item.url;
+  const pre = state.preloaded.get(item.url);
+  card.querySelector('img').src = pre ? pre.src : item.url;
+
   const [bPass,bSave] = card.querySelectorAll('.controls button');
   bPass.onclick = ()=> swipe(card, -1);
   bSave.onclick = ()=> swipe(card, +1);
   enableDrag(card);
   return card;
 }
-function escapeHtml(s){ return String(s).replace(/[&<>"']/g, c=>({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]))}
-
-/* render current and keep a hidden next ready */
 function renderBuffer(i){
   if(!stage.querySelector('.card.current')){
     const c = makeCard(state.items[i]); c.classList.add('current'); stage.appendChild(c);
@@ -147,132 +182,85 @@ function renderBuffer(i){
     const n = makeCard(state.items[i+1]); n.classList.add('next');
     n.style.opacity=0; n.style.pointerEvents='none'; stage.appendChild(n);
   }
-  preload(i);
 }
 
+/* load + full preload */
 async function loadYear(){
   const y = Number(document.getElementById('year').value);
   const market = document.getElementById('market').value || 'US/en';
   stage.innerHTML = '';
   state.items = []; state.idx = 0; state.preloaded.clear();
-  updateCounters();
+  updateCounters(); loadBtn.disabled = true;
 
-  const urls = marketApiURL(market);
   let data, lastErr;
-  for(const u of urls){
-    try{
-      const r = await fetch(u, {mode:'cors', cache:'no-cache'});
-      if(!r.ok) throw new Error(`HTTP ${r.status}`);
-      data = await r.json(); break;
-    }catch(e){ lastErr = e; }
+  for(const u of marketApiURL(market)){
+    try{ const r = await fetch(u, {mode:'cors', cache:'no-cache'}); if(!r.ok) throw new Error(`HTTP ${r.status}`); data = await r.json(); break; }
+    catch(e){ lastErr = e; }
   }
-  if(!data){
-    stage.innerHTML = `<div class="pill" style="color:#ffb3b3">Load failed for ${urls[0]}. ${lastErr?lastErr.message:''}</div>`;
-    return;
-  }
+  if(!data){ stage.innerHTML = `<div class="pill" style="color:#ffb3b3">Load failed. ${lastErr?lastErr.message:''}</div>`; loadBtn.disabled=false; return; }
 
-  state.items = data.filter(it=>{
-    if(!it || !it.url || !it.date) return false;
-    return new Date(it.date).getFullYear() === y;
+  state.items = data.filter(it=>it && it.url && it.date && new Date(it.date).getFullYear()===y);
+  if(state.items.length===0){ stage.innerHTML = `<div class="pill">No images for ${market} ${y}.</div>`; loadBtn.disabled=false; return; }
+
+  // show progress numbers
+  await preloadAll(state.items, {
+    concurrency: 8, // adjust if you want slower/faster network load
+    onProgress: (done,total)=>{
+      pctEl.textContent = `${done}/${total}`;
+      barEl.style.width = `${Math.round(done/total*100)}%`;
+    }
   });
 
-  if(state.items.length===0){
-    stage.innerHTML = `<div class="pill">No images found for ${market} ${y}.</div>`;
-    updateCounters(); return;
-  }
-
   renderBuffer(0);
-  updateCounters();
+  updateCounters(); loadBtn.disabled=false;
 }
 
+/* next / swipe */
 function nextCard(){
-  state.idx++;
-  updateCounters();
-
-  const cur = stage.querySelector('.card.current');
-  if(cur) cur.remove();
-
+  state.idx++; updateCounters();
+  const cur = stage.querySelector('.card.current'); if(cur) cur.remove();
   const promoted = stage.querySelector('.card.next');
-  if(promoted){
-    promoted.classList.remove('next'); promoted.classList.add('current');
-    promoted.style.opacity=''; promoted.style.pointerEvents='';
-  }
-
+  if(promoted){ promoted.classList.remove('next'); promoted.classList.add('current'); promoted.style.opacity=''; promoted.style.pointerEvents=''; }
   if(state.items[state.idx+1]){
     const n2 = makeCard(state.items[state.idx+1]);
-    n2.classList.add('next'); n2.style.opacity=0; n2.style.pointerEvents='none';
-    stage.appendChild(n2);
+    n2.classList.add('next'); n2.style.opacity=0; n2.style.pointerEvents='none'; stage.appendChild(n2);
   }
-  preload(state.idx);
 }
-
 function swipe(card, dir){
   if(dir>0) card.querySelector('.badge.save').style.opacity = 1;
   else card.querySelector('.badge.pass').style.opacity = 1;
-
   const off = dir>0 ? stage.clientWidth : -stage.clientWidth;
   card.style.transition = 'transform .25s ease, opacity .25s ease';
-  card.style.transform = `translateX(${off}px) rotate(${dir*12}deg)`;
-  card.style.opacity = '0.2';
-
+  card.style.transform = `translateX(${off}px) rotate(${dir*12}deg)`; card.style.opacity = '0.2';
   const current = state.items[state.idx];
   if(dir>0 && current){ state.saved.push(current); dlBtn.textContent = `Download ZIP (${state.saved.length})`; dlBtn.disabled=false; clearBtn.disabled=false; }
-
   setTimeout(()=>{ nextCard(); }, 240);
 }
 
-/* drag / swipe */
+/* drag */
 function enableDrag(card){
-  let startX=0, startY=0, dragging=false;
-  const saveBadge = card.querySelector('.badge.save');
-  const passBadge = card.querySelector('.badge.pass');
-
-  function onPointerDown(e){ dragging=true; startX = e.clientX||e.touches?.[0]?.clientX; startY = e.clientY||e.touches?.[0]?.clientY; card.setPointerCapture?.(e.pointerId) }
-  function onPointerMove(e){
-    if(!dragging) return;
-    const x = (e.clientX||e.touches?.[0]?.clientX) - startX;
-    const y = (e.clientY||e.touches?.[0]?.clientY) - startY;
-    card.style.transform = `translate(${x}px, ${y}px) rotate(${x/22}deg)`;
-    const a = Math.min(1, Math.abs(x)/120);
-    saveBadge.style.opacity = x>0?a:0; passBadge.style.opacity = x<0?a:0;
-  }
-  function onPointerUp(e){
-    if(!dragging) return; dragging=false;
-    const rect = stage.getBoundingClientRect();
-    const x = (e.clientX||e.changedTouches?.[0]?.clientX) - startX;
-    if(Math.abs(x) > rect.width*0.22){ swipe(card, x>0?+1:-1); }
-    else{
-      card.style.transition='transform .18s ease';
-      card.style.transform='translate(0,0) rotate(0)';
-      saveBadge.style.opacity = 0; passBadge.style.opacity = 0;
-      setTimeout(()=>card.style.transition='',180);
-    }
-  }
-  card.addEventListener('pointerdown', onPointerDown);
-  card.addEventListener('pointermove', onPointerMove);
-  card.addEventListener('pointerup', onPointerUp);
-  card.addEventListener('touchstart', e=>onPointerDown(e), {passive:true});
-  card.addEventListener('touchmove', e=>onPointerMove(e), {passive:true});
-  card.addEventListener('touchend', e=>onPointerUp(e));
+  let startX=0,startY=0,drag=false;
+  const saveB = card.querySelector('.badge.save'), passB = card.querySelector('.badge.pass');
+  function down(e){ drag=true; startX=e.clientX||e.touches?.[0]?.clientX; startY=e.clientY||e.touches?.[0]?.clientY; card.setPointerCapture?.(e.pointerId) }
+  function move(e){ if(!drag) return; const x=(e.clientX||e.touches?.[0]?.clientX)-startX; const y=(e.clientY||e.touches?.[0]?.clientY)-startY;
+    card.style.transform=`translate(${x}px,${y}px) rotate(${x/22}deg)`; const a=Math.min(1,Math.abs(x)/120); saveB.style.opacity=x>0?a:0; passB.style.opacity=x<0?a:0; }
+  function up(e){ if(!drag) return; drag=false; const rect=stage.getBoundingClientRect(); const x=(e.clientX||e.changedTouches?.[0]?.clientX)-startX;
+    if(Math.abs(x)>rect.width*0.22){ swipe(card,x>0?+1:-1); } else { card.style.transition='transform .18s ease'; card.style.transform='translate(0,0) rotate(0)'; saveB.style.opacity=0; passB.style.opacity=0; setTimeout(()=>card.style.transition='',180); } }
+  card.addEventListener('pointerdown',down); card.addEventListener('pointermove',move); card.addEventListener('pointerup',up);
+  card.addEventListener('touchstart',e=>down(e),{passive:true}); card.addEventListener('touchmove',e=>move(e),{passive:true}); card.addEventListener('touchend',e=>up(e));
 }
 
 /* ZIP */
 async function downloadZip(){
   if(state.saved.length===0) return;
-  const zip = new JSZip(); const folder = zip.folder('bing-selected');
-  const batchSize = 6; let i=0;
-  while(i<state.saved.length){
-    const chunk = state.saved.slice(i, i+batchSize);
-    await Promise.all(chunk.map(async (item, idx)=>{
-      const nameDate = (item.date||'').replaceAll('-','');
-      const ext = (item.url.split('.').pop()||'jpg').split('?')[0];
-      const fname = `${nameDate || String(i+idx).padStart(4,'0')}-${sanitize(item.title||'bing')}.${ext}`;
-      try{
-        const resp = await fetch(item.url, {mode:'cors', cache:'no-cache'});
-        const blob = await resp.blob(); folder.file(fname, blob);
-      }catch(e){ folder.file(`${fname}.txt`, `Failed to fetch image. Direct link:\n${item.url}`); }
+  const zip = new JSZip(); const folder = zip.folder('bing-selected'); const batch = 6;
+  for(let i=0;i<state.saved.length;i+=batch){
+    await Promise.all(state.saved.slice(i,i+batch).map(async (item,idx)=>{
+      const nameDate = (item.date||'').replaceAll('-',''); const ext=(item.url.split('.').pop()||'jpg').split('?')[0];
+      const fname=`${nameDate || String(i+idx).padStart(4,'0')}-${sanitize(item.title||'bing')}.${ext}`;
+      try{ const r=await fetch(item.url,{mode:'cors',cache:'no-cache'}); folder.file(fname, await r.blob()); }
+      catch{ folder.file(`${fname}.txt`, `Failed to fetch image. Direct link:\n${item.url}`); }
     }));
-    i += batchSize;
   }
   const blob = await zip.generateAsync({type:'blob'}); saveAs(blob, `bing-selected-${Date.now()}.zip`);
 }
@@ -284,13 +272,14 @@ passBtn.onclick = ()=>{ const c = stage.querySelector('.card.current'); if(c) sw
 saveBtn.onclick = ()=>{ const c = stage.querySelector('.card.current'); if(c) swipe(c,+1); };
 dlBtn.onclick = downloadZip;
 clearBtn.onclick = ()=>{ state.saved.length=0; updateCounters(); };
-
-document.addEventListener('keydown', e=>{
-  if(passBtn.disabled) return;
-  if(e.key==='ArrowLeft') passBtn.click();
-  if(e.key==='ArrowRight') saveBtn.click();
-});
+document.addEventListener('keydown', e=>{ if(passBtn.disabled) return; if(e.key==='ArrowLeft') passBtn.click(); if(e.key==='ArrowRight') saveBtn.click(); });
 updateCounters();
+
+/* progress update hook */
+(function(){
+  const onProgress = (done,total)=>{ pctEl.textContent=`${done}/${total}`; barEl.style.width=`${Math.round(done/total*100)}%`; };
+  window.onProgress = onProgress;
+})();
 </script>
 </body>
 </html>
