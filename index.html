@@ -225,3 +225,72 @@ function swipe(card, dir){
 function enableDrag(card){
   let startX=0, startY=0, dragging=false;
   const saveBadge = card.querySelector('.badge.save');
+  const passBadge = card.querySelector('.badge.pass');
+
+  function onPointerDown(e){ dragging=true; startX = e.clientX||e.touches?.[0]?.clientX; startY = e.clientY||e.touches?.[0]?.clientY; card.setPointerCapture?.(e.pointerId) }
+  function onPointerMove(e){
+    if(!dragging) return;
+    const x = (e.clientX||e.touches?.[0]?.clientX) - startX;
+    const y = (e.clientY||e.touches?.[0]?.clientY) - startY;
+    card.style.transform = `translate(${x}px, ${y}px) rotate(${x/22}deg)`;
+    const a = Math.min(1, Math.abs(x)/120);
+    saveBadge.style.opacity = x>0?a:0; passBadge.style.opacity = x<0?a:0;
+  }
+  function onPointerUp(e){
+    if(!dragging) return; dragging=false;
+    const rect = stage.getBoundingClientRect();
+    const x = (e.clientX||e.changedTouches?.[0]?.clientX) - startX;
+    if(Math.abs(x) > rect.width*0.22){ swipe(card, x>0?+1:-1); }
+    else{
+      card.style.transition='transform .18s ease';
+      card.style.transform='translate(0,0) rotate(0)';
+      saveBadge.style.opacity = 0; passBadge.style.opacity = 0;
+      setTimeout(()=>card.style.transition='',180);
+    }
+  }
+  card.addEventListener('pointerdown', onPointerDown);
+  card.addEventListener('pointermove', onPointerMove);
+  card.addEventListener('pointerup', onPointerUp);
+  card.addEventListener('touchstart', e=>onPointerDown(e), {passive:true});
+  card.addEventListener('touchmove', e=>onPointerMove(e), {passive:true});
+  card.addEventListener('touchend', e=>onPointerUp(e));
+}
+
+/* ZIP */
+async function downloadZip(){
+  if(state.saved.length===0) return;
+  const zip = new JSZip(); const folder = zip.folder('bing-selected');
+  const batchSize = 6; let i=0;
+  while(i<state.saved.length){
+    const chunk = state.saved.slice(i, i+batchSize);
+    await Promise.all(chunk.map(async (item, idx)=>{
+      const nameDate = (item.date||'').replaceAll('-','');
+      const ext = (item.url.split('.').pop()||'jpg').split('?')[0];
+      const fname = `${nameDate || String(i+idx).padStart(4,'0')}-${sanitize(item.title||'bing')}.${ext}`;
+      try{
+        const resp = await fetch(item.url, {mode:'cors', cache:'no-cache'});
+        const blob = await resp.blob(); folder.file(fname, blob);
+      }catch(e){ folder.file(`${fname}.txt`, `Failed to fetch image. Direct link:\n${item.url}`); }
+    }));
+    i += batchSize;
+  }
+  const blob = await zip.generateAsync({type:'blob'}); saveAs(blob, `bing-selected-${Date.now()}.zip`);
+}
+function sanitize(s){ return s.replace(/[\\/:*?"<>|]/g,'').replace(/\s+/g,' ').trim().slice(0,120) }
+
+/* wire */
+loadBtn.onclick = loadYear;
+passBtn.onclick = ()=>{ const c = stage.querySelector('.card.current'); if(c) swipe(c,-1); };
+saveBtn.onclick = ()=>{ const c = stage.querySelector('.card.current'); if(c) swipe(c,+1); };
+dlBtn.onclick = downloadZip;
+clearBtn.onclick = ()=>{ state.saved.length=0; updateCounters(); };
+
+document.addEventListener('keydown', e=>{
+  if(passBtn.disabled) return;
+  if(e.key==='ArrowLeft') passBtn.click();
+  if(e.key==='ArrowRight') saveBtn.click();
+});
+updateCounters();
+</script>
+</body>
+</html>
