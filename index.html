@@ -1,0 +1,301 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Bing Wallpaper Picker — Smash or Pass</title>
+<!-- ZIP + save libs -->
+<script src="https://unpkg.com/jszip@3.10.1/dist/jszip.min.js"></script>
+<script src="https://unpkg.com/file-saver@2.0.5/dist/FileSaver.min.js"></script>
+<style>
+  :root { --bg:#0b0d10; --card:#151922; --text:#e8eef9; --sub:#a6b0c3; --accent:#5aa9ff; --ok:#38c172; --no:#e3342f; }
+  html,body{height:100%}
+  body{margin:0;background:var(--bg);color:var(--text);font:16px/1.4 system-ui,Segoe UI,Roboto,Helvetica,Arial,sans-serif;display:flex;flex-direction:column}
+  header{padding:12px 16px;display:flex;flex-wrap:wrap;gap:8px;align-items:center;border-bottom:1px solid #1f2430}
+  header h1{font-size:16px;margin:0 10px 0 0;white-space:nowrap}
+  label{font-size:13px;color:var(--sub)}
+  input,select,button{background:#0f131a;color:var(--text);border:1px solid #2a3242;border-radius:8px;padding:8px 10px;font-size:14px}
+  button{cursor:pointer}
+  button.primary{background:var(--accent);border-color:var(--accent);color:#001225}
+  button.good{background:var(--ok);border-color:var(--ok);color:#00150b}
+  button.bad{background:var(--no);border-color:var(--no)}
+  button:disabled{opacity:.5;cursor:not-allowed}
+  #stage{position:relative;flex:1;overflow:hidden;display:grid;place-items:center;padding:10px}
+  .card{position:absolute;inset:auto;max-width:min(900px,95vw);max-height:calc(100% - 140px);aspect-ratio:16/9;background:var(--card);border:1px solid #273042;border-radius:14px;box-shadow:0 10px 30px rgba(0,0,0,.5);display:flex;flex-direction:column;overflow:hidden;touch-action:pan-y}
+  .card img{width:100%;height:100%;object-fit:cover;flex:1;background:#000}
+  .meta{padding:10px 12px;background:rgba(10,12,16,.8);display:flex;gap:10px;align-items:baseline;flex-wrap:wrap}
+  .meta .title{font-weight:600}
+  .meta .date{color:var(--sub);font-size:13px}
+  .controls{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-left:auto}
+  .stackhint{position:absolute;top:10px;left:50%;transform:translateX(-50%);font-size:12px;color:var(--sub)}
+  .pill{padding:2px 8px;border-radius:999px;border:1px solid #2a3242}
+  #queueInfo{font-size:12px;color:var(--sub)}
+  footer{padding:10px 12px;border-top:1px solid #1f2430;display:flex;gap:8px;flex-wrap:wrap;justify-content:space-between}
+  /* swipe feedback */
+  .badge{position:absolute;top:14px;font-weight:900;font-size:22px;padding:6px 10px;border-radius:8px;border:3px solid;transform:rotate(-10deg);opacity:0}
+  .badge.save{left:14px;color:#d7ffe3;border-color:var(--ok);background:rgba(56,193,114,.12)}
+  .badge.pass{right:14px;color:#ffd6d6;border-color:var(--no);background:rgba(227,52,47,.12);transform:rotate(10deg)}
+  @media (max-width:640px){ header{gap:6px} .meta{font-size:14px} }
+</style>
+</head>
+<body>
+<header>
+  <h1>Bing Wallpaper Picker</h1>
+  <label>Market
+    <input id="market" value="US/en" placeholder="e.g. US/en or ROW/en" />
+  </label>
+  <label>Year
+    <input id="year" type="number" min="2009" max="2100" value="2024" />
+  </label>
+  <button id="load" class="primary">Load</button>
+  <span id="queueInfo" class="pill">0 loaded</span>
+  <span class="pill">Keys: ← pass, → save</span>
+  <div style="margin-left:auto;display:flex;gap:8px">
+    <button id="download" class="good" disabled>Download ZIP (0)</button>
+    <button id="clear" class="bad" disabled>Clear Saved</button>
+  </div>
+</header>
+
+<div id="stage">
+  <div class="stackhint">Load a year, then swipe the card. Drag right = save. Drag left = pass.</div>
+</div>
+
+<footer>
+  <div style="display:flex;gap:8px">
+    <button id="passBtn" class="bad" disabled>Pass</button>
+    <button id="saveBtn" class="good" disabled>Save</button>
+  </div>
+  <div style="font-size:12px;color:var(--sub)">Source: bing.npanuhin.me (Bing Wallpaper Archive). Uses the <code>url</code> field returned by the year JSON.</div>
+</footer>
+
+<script>
+/* ---------- config ---------- */
+// Build the year JSON URL. Repo shows markets like US/en and ROW/en and per-year JSON.
+// We use: https://bing.npanuhin.me/{market}.{year}.json  (e.g., US/en.2021.json)
+function yearFileURL(market, year){
+  market = market.trim().replace(/^\/+|\/+$/g,''); // strip slashes
+  return `https://bing.npanuhin.me/${market}.${year}.json`;
+}
+
+/* ---------- state ---------- */
+const state = {
+  items: [],       // [{title,date,url,bing_url,...}]
+  idx: 0,          // current pointer
+  saved: [],       // array of selected items
+  preloaded: new Map(), // url -> HTMLImageElement
+};
+
+/* ---------- elements ---------- */
+const stage = document.getElementById('stage');
+const loadBtn = document.getElementById('load');
+const passBtn = document.getElementById('passBtn');
+const saveBtn = document.getElementById('saveBtn');
+const dlBtn   = document.getElementById('download');
+const clearBtn= document.getElementById('clear');
+const queueInfo = document.getElementById('queueInfo');
+
+/* ---------- helpers ---------- */
+function fmtDate(s){ try{ return new Date(s).toISOString().slice(0,10) }catch{ return s||'' } }
+function updateCounters(){
+  queueInfo.textContent = `${state.items.length} loaded · ${state.idx}/${state.items.length} viewed`;
+  dlBtn.textContent = `Download ZIP (${state.saved.length})`;
+  dlBtn.disabled = state.saved.length===0;
+  clearBtn.disabled = state.saved.length===0;
+  const canAct = state.items.length>0 && state.idx<state.items.length;
+  passBtn.disabled = !canAct; saveBtn.disabled = !canAct;
+}
+function preload(i){
+  for(let k=i; k<i+3; k++){
+    const it = state.items[k];
+    if(!it) break;
+    if(!state.preloaded.has(it.url)){
+      const img = new Image();
+      img.src = it.url;
+      state.preloaded.set(it.url,img);
+    }
+  }
+}
+function makeCard(item){
+  const card = document.createElement('div');
+  card.className = 'card';
+  card.innerHTML = `
+    <div class="badge save">SAVE</div>
+    <div class="badge pass">PASS</div>
+    <img alt="">
+    <div class="meta">
+      <div class="title">${escapeHtml(item.title||'(no title)')}</div>
+      <div class="date">${fmtDate(item.date)}</div>
+      <div class="controls">
+        <button class="bad">Pass</button>
+        <button class="good">Save</button>
+      </div>
+    </div>`;
+  card.querySelector('img').src = item.url;
+  // hook local buttons
+  const [bPass,bSave] = card.querySelectorAll('.controls button');
+  bPass.onclick = ()=> swipe(card, -1);
+  bSave.onclick = ()=> swipe(card, +1);
+  enableDrag(card);
+  return card;
+}
+function escapeHtml(s){ return String(s).replace(/[&<>"']/g, c=>({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]))}
+
+/* ---------- core flow ---------- */
+async function loadYear(){
+  const y = Number(document.getElementById('year').value);
+  const market = document.getElementById('market').value || 'US/en';
+  stage.innerHTML = '';
+  state.items = []; state.idx = 0; state.preloaded.clear();
+  updateCounters();
+
+  const url = yearFileURL(market, y);
+  let data;
+  try{
+    const r = await fetch(url, {mode:'cors', cache:'no-cache'});
+    if(!r.ok) throw new Error(`HTTP ${r.status}`);
+    data = await r.json();
+  }catch(err){
+    stage.innerHTML = `<div class="pill" style="color:#ffb3b3">Load failed for ${url}. Check market/year.</div>`;
+    console.error(err);
+    return;
+  }
+
+  // Expect array sorted asc. Filter strictly to that year just in case.
+  state.items = (Array.isArray(data)?data:[])
+    .filter(it => it && it.url && /^\d{4}-\d{2}-\d{2}$/.test(it.date||'') && new Date(it.date).getFullYear()===y);
+  // Fall back if date missing; still allow viewing.
+  if(state.items.length===0 && Array.isArray(data)){
+    state.items = data.filter(it => it && it.url);
+  }
+
+  // Build initial card
+  if(state.items.length===0){
+    stage.innerHTML = `<div class="pill">No images found for ${market} ${y}.</div>`;
+    updateCounters();
+    return;
+  }
+  const first = makeCard(state.items[0]);
+  stage.appendChild(first);
+  preload(0);
+  updateCounters();
+}
+
+function nextCard(){
+  state.idx++;
+  updateCounters();
+  const it = state.items[state.idx];
+  if(!it){ return; }
+  const card = makeCard(it);
+  stage.appendChild(card);
+  preload(state.idx);
+}
+
+function swipe(card, dir){
+  // dir: -1 pass, +1 save
+  if(dir>0) card.querySelector('.badge.save').style.opacity = 1;
+  else card.querySelector('.badge.pass').style.opacity = 1;
+
+  const off = dir>0 ? stage.clientWidth : -stage.clientWidth;
+  card.style.transition = 'transform .25s ease, opacity .25s ease';
+  card.style.transform = `translateX(${off}px) rotate(${dir*12}deg)`;
+  card.style.opacity = '0.2';
+
+  const current = state.items[state.idx];
+  if(dir>0 && current){ state.saved.push(current); dlBtn.textContent = `Download ZIP (${state.saved.length})`; dlBtn.disabled=false; clearBtn.disabled=false; }
+
+  setTimeout(()=>{ card.remove(); nextCard(); }, 240);
+}
+
+/* ---------- drag / swipe ---------- */
+function enableDrag(card){
+  let startX=0, startY=0, dragging=false;
+  const saveBadge = card.querySelector('.badge.save');
+  const passBadge = card.querySelector('.badge.pass');
+
+  function onPointerDown(e){ dragging=true; startX = e.clientX||e.touches?.[0]?.clientX; startY = e.clientY||e.touches?.[0]?.clientY; card.setPointerCapture?.(e.pointerId) }
+  function onPointerMove(e){
+    if(!dragging) return;
+    const x = (e.clientX||e.touches?.[0]?.clientX) - startX;
+    const y = (e.clientY||e.touches?.[0]?.clientY) - startY;
+    card.style.transform = `translate(${x}px, ${y}px) rotate(${x/22}deg)`;
+    const a = Math.min(1, Math.abs(x)/120);
+    saveBadge.style.opacity = x>0?a:0;
+    passBadge.style.opacity = x<0?a:0;
+  }
+  function onPointerUp(e){
+    if(!dragging) return; dragging=false;
+    const rect = stage.getBoundingClientRect();
+    const x = (e.clientX||e.changedTouches?.[0]?.clientX) - startX;
+    if(Math.abs(x) > rect.width*0.22){
+      swipe(card, x>0?+1:-1);
+    }else{
+      card.style.transition='transform .18s ease';
+      card.style.transform='translate(0,0) rotate(0)';
+      saveBadge.style.opacity = 0; passBadge.style.opacity = 0;
+      setTimeout(()=>card.style.transition='',180);
+    }
+  }
+
+  // Pointer events
+  card.addEventListener('pointerdown', onPointerDown);
+  card.addEventListener('pointermove', onPointerMove);
+  card.addEventListener('pointerup', onPointerUp);
+  // Touch fallback
+  card.addEventListener('touchstart', e=>onPointerDown(e), {passive:true});
+  card.addEventListener('touchmove', e=>onPointerMove(e), {passive:true});
+  card.addEventListener('touchend', e=>onPointerUp(e));
+}
+
+/* ---------- zip download ---------- */
+async function downloadZip(){
+  if(state.saved.length===0) return;
+  const zip = new JSZip();
+  const folder = zip.folder('bing-selected');
+
+  // Fetch images in small parallel batches
+  const batchSize = 6;
+  let i=0;
+  while(i<state.saved.length){
+    const chunk = state.saved.slice(i, i+batchSize);
+    await Promise.all(chunk.map(async (item, idx)=>{
+      const nameDate = (item.date||'').replaceAll('-','');
+      const ext = (item.url.split('.').pop()||'jpg').split('?')[0];
+      const fname = `${nameDate || String(i+idx).padStart(4,'0')}-${sanitize(item.title||'bing')}.${ext}`;
+      try{
+        const resp = await fetch(item.url, {mode:'cors', cache:'no-cache'});
+        const blob = await resp.blob();
+        folder.file(fname, blob);
+      }catch(e){
+        // As fallback, store a text pointer to the URL
+        folder.file(`${fname}.txt`, `Failed to fetch image. Direct link:\n${item.url}`);
+      }
+    }));
+    i += batchSize;
+  }
+
+  const blob = await zip.generateAsync({type:'blob'});
+  saveAs(blob, `bing-selected-${Date.now()}.zip`);
+}
+function sanitize(s){ return s.replace(/[\\/:*?"<>|]/g,'').replace(/\s+/g,' ').trim().slice(0,120) }
+
+/* ---------- wire up ---------- */
+loadBtn.onclick = loadYear;
+passBtn.onclick = ()=>{ const c = stage.querySelector('.card:last-of-type'); if(c) swipe(c,-1); };
+saveBtn.onclick = ()=>{ const c = stage.querySelector('.card:last-of-type'); if(c) swipe(c,+1); };
+dlBtn.onclick = downloadZip;
+clearBtn.onclick = ()=>{ state.saved.length=0; updateCounters(); };
+
+document.addEventListener('keydown', e=>{
+  if(passBtn.disabled) return;
+  if(e.key==='ArrowLeft') passBtn.click();
+  if(e.key==='ArrowRight') saveBtn.click();
+});
+
+updateCounters();
+
+/* ---------- extras: restore last selections in-session ---------- */
+window.addEventListener('beforeunload', ()=>{ /* no persistent storage by default */ });
+
+</script>
+</body>
+</html>
