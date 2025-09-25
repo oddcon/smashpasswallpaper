@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Bing Wallpaper Picker — Smash or Pass</title>
+<title>Bing Wallpaper Picker — Cached</title>
 <link rel="preconnect" href="https://bing.npanuhin.me" crossorigin>
 <script src="https://unpkg.com/jszip@3.10.1/dist/jszip.min.js"></script>
 <script src="https://unpkg.com/file-saver@2.0.5/dist/FileSaver.min.js"></script>
@@ -27,61 +27,60 @@
   .meta .title{font-weight:600}
   .meta .date{color:var(--sub);font-size:13px}
   .controls{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-left:auto}
-  .stackhint{position:absolute;top:10px;left:50%;transform:translateX(-50%);font-size:12px;color:var(--sub)}
   .pill{padding:2px 8px;border-radius:999px;border:1px solid #2a3242}
   #queueInfo{font-size:12px;color:var(--sub)}
   footer{padding:10px 12px;border-top:1px solid #1f2430;display:flex;gap:8px;flex-wrap:wrap;justify-content:space-between}
   .badge{position:absolute;top:14px;font-weight:900;font-size:22px;padding:6px 10px;border-radius:8px;border:3px solid;transform:rotate(-10deg);opacity:0}
   .badge.save{left:14px;color:#d7ffe3;border-color:var(--ok);background:rgba(56,193,114,.12)}
   .badge.pass{right:14px;color:#ffd6d6;border-color:var(--no);background:rgba(227,52,47,.12);transform:rotate(10deg)}
-  /* preload overlay */
-  #preloadOverlay{position:fixed;inset:0;background:rgba(10,12,16,.92);display:none;align-items:center;justify-content:center;z-index:5}
-  #preloadBox{width:min(520px,92vw);background:#131823;border:1px solid #2a3242;border-radius:12px;padding:18px}
+  /* overlay */
+  #pre{position:fixed;inset:0;background:rgba(10,12,16,.92);display:none;align-items:center;justify-content:center;z-index:5}
+  #box{width:min(520px,92vw);background:#131823;border:1px solid #2a3242;border-radius:12px;padding:18px}
   #bar{height:10px;background:#0f131a;border:1px solid #2a3242;border-radius:999px;overflow:hidden;margin-top:10px}
   #bar>i{display:block;height:100%;width:0;background:var(--accent)}
   #pct{font-variant-numeric:tabular-nums}
-  @media (max-width:640px){ header{gap:6px} .meta{font-size:14px} }
 </style>
 </head>
 <body>
 <header>
   <h1>Bing Wallpaper Picker</h1>
   <label>Market
-    <input id="market" value="US/en" placeholder="e.g. US/en or ROW/en" />
+    <input id="market" value="US/en" placeholder="US/en or ROW/en" />
   </label>
   <label>Year
     <input id="year" type="number" min="2009" max="2100" value="2024" />
   </label>
+  <label>Start after
+    <input id="threshold" type="number" min="1" max="366" value="24" />
+  </label>
   <button id="load" class="primary">Load</button>
   <span id="queueInfo" class="pill">0 loaded</span>
-  <span class="pill">Keys: ← pass, → save</span>
   <div style="margin-left:auto;display:flex;gap:8px">
     <button id="download" class="good" disabled>Download ZIP (0)</button>
     <button id="clear" class="bad" disabled>Clear Saved</button>
   </div>
 </header>
 
-<div id="stage">
-  <div class="stackhint">Load a year. The app will preload all images, then start.</div>
-</div>
+<div id="stage"><div class="pill">Choose a year and Load. The app will cache wallpapers in the background.</div></div>
 
 <footer>
   <div style="display:flex;gap:8px">
     <button id="passBtn" class="bad" disabled>Pass</button>
     <button id="saveBtn" class="good" disabled>Save</button>
   </div>
-  <div style="font-size:12px;color:var(--sub)">Source: bing.npanuhin.me (Bing Wallpaper Archive). Uses the <code>url</code> field from the market JSON.</div>
+  <div style="font-size:12px;color:var(--sub)">Images cached in the browser. Close tab to release memory; cache persists until cleared.</div>
 </footer>
 
-<!-- Preload overlay -->
-<div id="preloadOverlay">
-  <div id="preloadBox">
+<div id="pre">
+  <div id="box">
     <div style="display:flex;justify-content:space-between;align-items:end;gap:8px">
-      <div style="font-weight:600">Preloading wallpapers…</div>
+      <div style="font-weight:600">Caching wallpapers…</div>
       <div id="pct" class="pill">0/0</div>
     </div>
     <div id="bar"><i></i></div>
-    <div id="hint" style="margin-top:8px;color:var(--sub);font-size:13px">Decoding images for instant swipes. Please wait.</div>
+    <div id="hint" style="margin-top:8px;color:var(--sub);font-size:13px">
+      Starts automatically after the threshold is ready. Continues caching in background.
+    </div>
   </div>
 </div>
 
@@ -96,22 +95,28 @@ function marketApiURL(market){
 }
 
 /* state */
-const state = { items: [], idx: 0, saved: [], preloaded: new Map() };
+const state = {
+  items: [], idx: 0, saved: [],
+  cacheName: 'bing-wallpapers-v1',
+  objUrls: new Map() // url -> objectURL
+};
 
-/* elements */
+/* els */
 const stage = document.getElementById('stage');
 const loadBtn = document.getElementById('load');
 const passBtn = document.getElementById('passBtn');
 const saveBtn = document.getElementById('saveBtn');
-const dlBtn   = document.getElementById('download');
-const clearBtn= document.getElementById('clear');
+const dlBtn = document.getElementById('download');
+const clearBtn = document.getElementById('clear');
 const queueInfo = document.getElementById('queueInfo');
-const overlay = document.getElementById('preloadOverlay');
+const overlay = document.getElementById('pre');
 const pctEl = document.getElementById('pct');
 const barEl = document.querySelector('#bar>i');
 
-/* ui helpers */
+/* utils */
 function fmtDate(s){ try{ return new Date(s).toISOString().slice(0,10) }catch{ return s||'' } }
+function escapeHtml(s){ return String(s).replace(/[&<>"']/g, c=>({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]))}
+function sanitize(s){ return s.replace(/[\\/:*?"<>|]/g,'').replace(/\s+/g,' ').trim().slice(0,120) }
 function updateCounters(){
   queueInfo.textContent = `${state.items.length} loaded · ${state.idx}/${state.items.length} viewed`;
   dlBtn.textContent = `Download ZIP (${state.saved.length})`;
@@ -120,36 +125,58 @@ function updateCounters(){
   const canAct = state.items.length>0 && state.idx<state.items.length;
   passBtn.disabled = !canAct; saveBtn.disabled = !canAct;
 }
-function escapeHtml(s){ return String(s).replace(/[&<>"']/g, c=>({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]))}
 
-/* preload all with concurrency and decode */
-async function preloadAll(list, {concurrency=8, onProgress=()=>{}}={}){
-  overlay.style.display = 'flex';
-  pctEl.textContent = `0/${list.length}`; barEl.style.width = '0%';
-
-  let i = 0, done = 0;
-  async function work(idx){
-    const it = list[idx]; if(!it) return;
-    if(state.preloaded.has(it.url)) { done++; onProgress(done,list.length); return; }
-    const img = new Image();
-    img.decoding = 'async';
-    img.referrerPolicy = 'no-referrer';
-    img.src = it.url;
-    try{ await img.decode(); }catch{}
-    state.preloaded.set(it.url, img);
-    done++; onProgress(done, list.length);
+/* get Blob for an image from CacheStorage; if missing, fetch and store */
+/* returns objectURL for instant <img> and the Blob for ZIP use */
+async function getFromCache(url){
+  const cache = await caches.open(state.cacheName);
+  const req = new Request(url, {mode:'no-cors'});
+  let resp = await cache.match(req);
+  if(!resp){
+    const net = await fetch(url, {mode:'cors', cache:'no-cache'});
+    const blob = await net.blob();
+    resp = new Response(blob, {headers: {'Content-Type': blob.type || 'image/jpeg'}});
+    await cache.put(req, resp.clone());
   }
-  function nextIndex(){ return i < list.length ? i++ : null; }
+  const blob = await resp.blob();
+  let obj = state.objUrls.get(url);
+  if(!obj){ obj = URL.createObjectURL(blob); state.objUrls.set(url, obj); }
+  return {blob, objURL: obj};
+}
 
-  const workers = Array.from({length: Math.min(concurrency, list.length)}, async ()=>{
+/* full-year caching with concurrency; starts game after N ready */
+async function cacheAll(threshold){
+  overlay.style.display = 'flex';
+  const total = state.items.length;
+  pctEl.textContent = `0/${total}`; barEl.style.width = '0%';
+
+  let done = 0, started = false, i = 0;
+  const concurrency = 10; // tune for network
+  async function work(idx){
+    const it = state.items[idx]; if(!it) return;
+    try{
+      const {objURL} = await getFromCache(it.url);
+      // decode once to ensure instant paint later
+      const img = new Image(); img.decoding='async'; img.src = objURL;
+      try{ await img.decode(); }catch{}
+    }catch{}
+    done++;
+    pctEl.textContent = `${done}/${total}`;
+    barEl.style.width = `${Math.round(done/total*100)}%`;
+    if(!started && done >= Math.min(threshold,total)){
+      started = true; overlay.style.display = 'none'; startGame();
+    }
+  }
+  function nextIndex(){ return i < total ? i++ : null; }
+  const workers = Array.from({length: Math.min(concurrency,total)}, async ()=>{
     while(true){ const n = nextIndex(); if(n===null) break; await work(n); }
   });
   await Promise.all(workers);
-
   overlay.style.display = 'none';
+  if(!started) startGame();
 }
 
-/* cards */
+/* build cards using cached object URLs */
 function makeCard(item){
   const card = document.createElement('div');
   card.className = 'card';
@@ -165,8 +192,9 @@ function makeCard(item){
         <button class="good">Save</button>
       </div>
     </div>`;
-  const pre = state.preloaded.get(item.url);
-  card.querySelector('img').src = pre ? pre.src : item.url;
+  const img = card.querySelector('img');
+  const obj = state.objUrls.get(item.url);
+  img.src = obj || item.url;
 
   const [bPass,bSave] = card.querySelectorAll('.controls button');
   bPass.onclick = ()=> swipe(card, -1);
@@ -184,36 +212,40 @@ function renderBuffer(i){
   }
 }
 
-/* load + full preload */
+/* flow */
 async function loadYear(){
   const y = Number(document.getElementById('year').value);
   const market = document.getElementById('market').value || 'US/en';
+  const thr = Math.max(1, Number(document.getElementById('threshold').value)||24);
   stage.innerHTML = '';
-  state.items = []; state.idx = 0; state.preloaded.clear();
+  state.items = []; state.idx = 0; state.saved = [];
   updateCounters(); loadBtn.disabled = true;
 
+  // get API json
   let data, lastErr;
   for(const u of marketApiURL(market)){
     try{ const r = await fetch(u, {mode:'cors', cache:'no-cache'}); if(!r.ok) throw new Error(`HTTP ${r.status}`); data = await r.json(); break; }
     catch(e){ lastErr = e; }
   }
   if(!data){ stage.innerHTML = `<div class="pill" style="color:#ffb3b3">Load failed. ${lastErr?lastErr.message:''}</div>`; loadBtn.disabled=false; return; }
-
   state.items = data.filter(it=>it && it.url && it.date && new Date(it.date).getFullYear()===y);
   if(state.items.length===0){ stage.innerHTML = `<div class="pill">No images for ${market} ${y}.</div>`; loadBtn.disabled=false; return; }
 
-  // show progress numbers
-  await preloadAll(state.items, {
-    concurrency: 8, // adjust if you want slower/faster network load
-    onProgress: (done,total)=>{
-      pctEl.textContent = `${done}/${total}`;
-      barEl.style.width = `${Math.round(done/total*100)}%`;
+  // show storage estimate
+  try{
+    const est = await navigator.storage?.estimate?.();
+    if(est?.quota){ const mb = (est.quota/1024/1024).toFixed(0);
+      stage.innerHTML = `<div class="pill">Browser storage quota ≈ ${mb} MB. Caching ${state.items.length} images…</div>`;
     }
-  });
+  }catch{}
 
-  renderBuffer(0);
-  updateCounters(); loadBtn.disabled=false;
+  // kick caching; game starts after threshold ready; rest continues in background
+  await caches.open(state.cacheName); // ensure cache exists
+  overlay.style.display = 'flex';
+  pctEl.textContent = `0/${state.items.length}`; barEl.style.width = '0%';
+  cacheAll(thr).finally(()=>{ loadBtn.disabled=false; });
 }
+function startGame(){ stage.innerHTML=''; renderBuffer(0); updateCounters(); }
 
 /* next / swipe */
 function nextCard(){
@@ -250,36 +282,35 @@ function enableDrag(card){
   card.addEventListener('touchstart',e=>down(e),{passive:true}); card.addEventListener('touchmove',e=>move(e),{passive:true}); card.addEventListener('touchend',e=>up(e));
 }
 
-/* ZIP */
+/* ZIP reuses cached blobs */
 async function downloadZip(){
   if(state.saved.length===0) return;
-  const zip = new JSZip(); const folder = zip.folder('bing-selected'); const batch = 6;
+  const zip = new JSZip(); const folder = zip.folder('bing-selected'); const batch = 8;
   for(let i=0;i<state.saved.length;i+=batch){
     await Promise.all(state.saved.slice(i,i+batch).map(async (item,idx)=>{
       const nameDate = (item.date||'').replaceAll('-',''); const ext=(item.url.split('.').pop()||'jpg').split('?')[0];
       const fname=`${nameDate || String(i+idx).padStart(4,'0')}-${sanitize(item.title||'bing')}.${ext}`;
-      try{ const r=await fetch(item.url,{mode:'cors',cache:'no-cache'}); folder.file(fname, await r.blob()); }
-      catch{ folder.file(`${fname}.txt`, `Failed to fetch image. Direct link:\n${item.url}`); }
+      try{
+        const {blob} = await getFromCache(item.url); folder.file(fname, blob);
+      }catch{ folder.file(`${fname}.txt`, `Failed to get image. Direct link:\n${item.url}`); }
     }));
   }
   const blob = await zip.generateAsync({type:'blob'}); saveAs(blob, `bing-selected-${Date.now()}.zip`);
 }
-function sanitize(s){ return s.replace(/[\\/:*?"<>|]/g,'').replace(/\s+/g,' ').trim().slice(0,120) }
 
 /* wire */
 loadBtn.onclick = loadYear;
 passBtn.onclick = ()=>{ const c = stage.querySelector('.card.current'); if(c) swipe(c,-1); };
 saveBtn.onclick = ()=>{ const c = stage.querySelector('.card.current'); if(c) swipe(c,+1); };
 dlBtn.onclick = downloadZip;
-clearBtn.onclick = ()=>{ state.saved.length=0; updateCounters(); };
+clearBtn.onclick = async ()=>{
+  state.saved.length=0; updateCounters();
+  // optional: clear cached images too
+  const cache = await caches.open(state.cacheName); const keys = await cache.keys(); for(const k of keys) await cache.delete(k);
+  state.objUrls.forEach(u=>URL.revokeObjectURL(u)); state.objUrls.clear();
+};
 document.addEventListener('keydown', e=>{ if(passBtn.disabled) return; if(e.key==='ArrowLeft') passBtn.click(); if(e.key==='ArrowRight') saveBtn.click(); });
 updateCounters();
-
-/* progress update hook */
-(function(){
-  const onProgress = (done,total)=>{ pctEl.textContent=`${done}/${total}`; barEl.style.width=`${Math.round(done/total*100)}%`; };
-  window.onProgress = onProgress;
-})();
 </script>
 </body>
 </html>
