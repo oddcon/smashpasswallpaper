@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Bing Wallpaper Picker — Cached</title>
+<title>Bing Wallpaper Picker</title>
 <link rel="preconnect" href="https://bing.npanuhin.me" crossorigin>
 <script src="https://unpkg.com/jszip@3.10.1/dist/jszip.min.js"></script>
 <script src="https://unpkg.com/file-saver@2.0.5/dist/FileSaver.min.js"></script>
@@ -15,6 +15,7 @@
   header h1{font-size:16px;margin:0 10px 0 0;white-space:nowrap}
   label{font-size:13px;color:var(--sub);display:flex;flex-direction:column;gap:4px}
   input,select,button{background:#0f131a;color:var(--text);border:1px solid #2a3242;border-radius:8px;padding:8px 10px;font-size:14px}
+  input[type="text"]{width:26ch}
   button{cursor:pointer}
   button.primary{background:var(--accent);border-color:var(--accent);color:#001225}
   button.good{background:var(--ok);border-color:var(--ok);color:#00150b}
@@ -37,7 +38,7 @@
   .badge.save{left:14px;color:#d7ffe3;border-color:var(--ok);background:rgba(56,193,114,.12)}
   .badge.pass{right:14px;color:#ffd6d6;border-color:var(--no);background:rgba(227,52,47,.12);transform:rotate(10deg)}
   .overlay{position:fixed;inset:0;background:rgba(10,12,16,.92);display:none;align-items:center;justify-content:center;z-index:5}
-  .box{width:min(680px,94vw);max-height:90vh;overflow:auto;background:#131823;border:1px solid #2a3242;border-radius:12px;padding:18px}
+  .box{width:min(720px,94vw);max-height:90vh;overflow:auto;background:#131823;border:1px solid #2a3242;border-radius:12px;padding:18px}
   #bar{height:10px;background:#0f131a;border:1px solid #2a3242;border-radius:999px;overflow:hidden;margin-top:10px}
   #bar>i{display:block;height:100%;width:0;background:var(--accent)}
   #pct{font-variant-numeric:tabular-nums}
@@ -60,6 +61,16 @@
   </label>
   <button id="load" class="primary">Load</button>
   <span id="queueInfo" class="pill">0 loaded</span>
+
+  <label>ZIP proxy
+    <select id="proxyMode">
+      <option value="weserv" selected>images.weserv.nl</option>
+      <option value="none">none (likely fails)</option>
+      <option value="custom">custom template</option>
+    </select>
+  </label>
+  <input id="proxyTpl" type="text" placeholder="custom: https://example.com/?url={hostless} or {encoded}" style="display:none">
+
   <div style="margin-left:auto;display:flex;gap:8px;flex-wrap:wrap">
     <button id="reload" class="ghost" disabled>Reload image (R)</button>
     <button id="undo" class="ghost" disabled>Undo</button>
@@ -69,7 +80,7 @@
   </div>
 </header>
 
-<div id="stage"><div class="pill">Choose year and Load. Caching continues in background.</div></div>
+<div id="stage"><div class="pill">Choose year and Load. Caching continues in background. Arrows or swipe to pick.</div></div>
 
 <footer>
   <div style="display:flex;gap:8px">
@@ -88,9 +99,9 @@
     </div>
     <div id="bar"><i></i></div>
     <div id="hint" style="margin-top:8px;color:var(--sub);font-size:13px">
-      Accurate progress counts only decoded images. Failures are retried.
+      Progress counts decoded images. Retries on errors. You can start anytime.
     </div>
-    <div style="margin-top:10px;display:flex;gap:8px">
+    <div style="margin-top:10px;display:flex;gap:8px;align-items:center">
       <button id="startNow" class="primary">Start now</button>
       <span id="failTxt" class="pill">failed: 0</span>
     </div>
@@ -112,7 +123,7 @@
 </div>
 
 <script>
-/* endpoints */
+/* ---------- constants ---------- */
 function marketApiURL(market){
   const m = market.trim().replace(/^\/+|\/+$/g,'');
   return [
@@ -120,8 +131,6 @@ function marketApiURL(market){
     `https://raw.githubusercontent.com/npanuhin/Bing-Wallpaper-Archive/master/api/${m}.json`,
   ];
 }
-
-/* years: 2010..min(2025, current) */
 (function initYears(){
   const sel = document.getElementById('year');
   const nowY = new Date().getFullYear();
@@ -130,8 +139,27 @@ function marketApiURL(market){
     if(y===nowY) o.selected=true; sel.appendChild(o);
   }
 })();
+const LS_KEY = 'bwp_sessions';
 
-/* state + persistence */
+/* ---------- proxy config ---------- */
+function toProxy(url){
+  const mode = document.getElementById('proxyMode').value;
+  if(mode==='none') return url;
+  if(mode==='weserv'){
+    const hostless = url.replace(/^https?:\/\//,'');
+    return `https://images.weserv.nl/?url=${encodeURIComponent(hostless)}`;
+  }
+  // custom template: supports {hostless} and {encoded}
+  const tpl = document.getElementById('proxyTpl').value.trim();
+  const hostless = url.replace(/^https?:\/\//,'');
+  const encoded = encodeURIComponent(url);
+  return tpl.replaceAll('{hostless}', hostless).replaceAll('{encoded}', encoded);
+}
+document.getElementById('proxyMode').addEventListener('change', e=>{
+  document.getElementById('proxyTpl').style.display = e.target.value==='custom' ? '' : 'none';
+});
+
+/* ---------- state ---------- */
 const state = {
   items: [], idx: 0,
   saved: new Set(), skipped: new Set(),
@@ -140,23 +168,15 @@ const state = {
   objUrls: new Map(),
   market: 'US/en', year: new Date().getFullYear()
 };
-const LS_KEY = 'bwp_sessions';
-function sessionKey(m,y){ return `${m}|${y}`; }
-function loadSession(m,y){ try{ return (JSON.parse(localStorage.getItem(LS_KEY)||'{}'))[sessionKey(m,y)]||null }catch{return null} }
-function saveSession(){
-  let db={}; try{ db=JSON.parse(localStorage.getItem(LS_KEY)||'{}') }catch{}
-  db[sessionKey(state.market,state.year)] = {saved:[...state.saved], skipped:[...state.skipped], idx: state.idx};
-  localStorage.setItem(LS_KEY, JSON.stringify(db));
-}
 
-/* els */
+/* ---------- elements ---------- */
 const stage = document.getElementById('stage');
 const loadBtn = document.getElementById('load');
 const passBtn = document.getElementById('passBtn');
 const saveBtn = document.getElementById('saveBtn');
 const reloadBtn = document.getElementById('reload');
 const dlBtn = document.getElementById('download');
-const clearBtn= document.getElementById('clear');
+const clearBtn = document.getElementById('clear');
 const queueInfo = document.getElementById('queueInfo');
 const undoBtn = document.getElementById('undo');
 const reviewBtn = document.getElementById('review');
@@ -170,10 +190,17 @@ const closeRevBtn = document.getElementById('closeRev');
 const gridSaved = document.getElementById('gridSaved');
 const gridSkipped = document.getElementById('gridSkipped');
 
-/* utils */
+/* ---------- utils ---------- */
 function fmtDate(s){ try{ return new Date(s).toISOString().slice(0,10) }catch{ return s||'' } }
 function esc(s){ return String(s).replace(/[&<>"']/g, c=>({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]))}
 function sanitize(s){ return s.replace(/[\\/:*?"<>|]/g,'').replace(/\s+/g,' ').trim().slice(0,120) }
+function sessionKey(m,y){ return `${m}|${y}`; }
+function loadSession(m,y){ try{ return (JSON.parse(localStorage.getItem(LS_KEY)||'{}'))[sessionKey(m,y)]||null }catch{return null} }
+function saveSession(){
+  let db={}; try{ db=JSON.parse(localStorage.getItem(LS_KEY)||'{}') }catch{}
+  db[sessionKey(state.market,state.year)] = {saved:[...state.saved], skipped:[...state.skipped], idx: state.idx};
+  localStorage.setItem(LS_KEY, JSON.stringify(db));
+}
 function updateCounters(){
   queueInfo.textContent = `${state.items.length} loaded · ${state.idx}/${state.items.length} viewed`;
   dlBtn.textContent = `Download ZIP (${state.saved.size})`;
@@ -184,16 +211,21 @@ function updateCounters(){
   reviewBtn.disabled = state.items.length===0;
 }
 
-/* cache helpers */
+/* ---------- cache helpers (proxy used for ZIP + initial blob fetch) ---------- */
+async function fetchBlob(url){
+  const target = toProxy(url); // proxy or direct
+  const r = await fetch(target, {mode:'cors', cache:'no-cache'});
+  if(!r.ok) throw new Error(`HTTP ${r.status}`);
+  return await r.blob();
+}
 async function getFromCache(url){
   const cache = await caches.open(state.cacheName);
-  const req = new Request(url, {mode:'no-cors'});
-  let resp = await cache.match(req);
+  const key = new Request(url, {mode:'no-cors'}); // cache by original URL
+  let resp = await cache.match(key);
   if(!resp){
-    const net = await fetch(url, {mode:'cors', cache:'no-cache'});
-    const blob = await net.blob();
+    const blob = await fetchBlob(url);
     resp = new Response(blob, {headers: {'Content-Type': blob.type || 'image/jpeg'}});
-    await cache.put(req, resp.clone());
+    await cache.put(key, resp.clone());
   }
   const blob = await resp.blob();
   let obj = state.objUrls.get(url);
@@ -201,39 +233,41 @@ async function getFromCache(url){
   return {blob, objURL: obj};
 }
 
-/* accurate caching with retries; progress = decoded successes */
+/* ---------- caching with retries; progress = decoded ---------- */
 async function cacheAll(){
   overlay.style.display = 'flex';
   const total = state.items.length;
   pctEl.textContent = `0/${total}`; barEl.style.width = '0%'; failTxt.textContent = 'failed: 0';
 
-  let success = 0, failed = 0, i = 0;
+  let ok = 0, failed = 0, i = 0;
   const concurrency = 10;
   async function work(idx){
     const it = state.items[idx]; if(!it) return;
-    let attempts = 0;
-    while(attempts < 3){
-      attempts++;
+    let tries = 0;
+    while(tries<3){
+      tries++;
       try{
-        const {objURL}=await getFromCache(it.url);
-        const im=new Image(); im.decoding='async'; im.src=objURL;
-        await im.decode(); // count only fully decoded images
-        success++; break;
+        const {objURL} = await getFromCache(it.url);
+        const im = new Image(); im.decoding='async'; im.src = objURL;
+        await im.decode();
+        ok++; break;
       }catch{
-        if(attempts>=3){ failed++; break; }
-        await new Promise(r=>setTimeout(r, 300*attempts));
+        if(tries>=3){ failed++; break; }
+        await new Promise(r=>setTimeout(r, 300*tries));
       }
     }
-    pctEl.textContent=`${success}/${total}`; barEl.style.width = `${Math.round(success/total*100)}%`; failTxt.textContent = `failed: ${failed}`;
+    pctEl.textContent = `${ok}/${total}`;
+    barEl.style.width = `${Math.round(ok/total*100)}%`;
+    failTxt.textContent = `failed: ${failed}`;
   }
-  function nextIndex(){ return i < total ? i++ : null; }
-  const workers = Array.from({length: Math.min(concurrency,total)}, async ()=>{
-    while(true){ const n = nextIndex(); if(n===null) break; await work(n); }
+  function next(){ return i<total ? i++ : null; }
+  const workers = Array.from({length:Math.min(concurrency,total)}, async ()=>{
+    while(true){ const n = next(); if(n===null) break; await work(n); }
   });
   Promise.all(workers).finally(()=>{ overlay.style.display='none'; });
 }
 
-/* build card with caption and robust error recovery */
+/* ---------- UI: card ---------- */
 function makeCard(item){
   const card = document.createElement('div');
   card.className = 'card';
@@ -253,7 +287,7 @@ function makeCard(item){
       </div>
     </div>`;
   const img = card.querySelector('img');
-  const use = srcFor(item.url); img.src = use;
+  img.src = state.objUrls.get(item.url) || item.url;
   img.onerror = async ()=>{ await hardReload(item.url, img); };
   const [bPass,bSave] = card.querySelectorAll('.controls button');
   bPass.onclick = ()=> swipe(card, -1);
@@ -261,19 +295,14 @@ function makeCard(item){
   enableDrag(card);
   return card;
 }
-function srcFor(url){ return state.objUrls.get(url) || url; }
 async function hardReload(url, targetImg){
   try{
-    // force-refresh cache entry and object URL
     const cache = await caches.open(state.cacheName);
-    const req = new Request(url, {mode:'no-cors'});
-    await cache.delete(req);
+    await cache.delete(new Request(url, {mode:'no-cors'}));
     const {objURL} = await getFromCache(url);
     if(targetImg){ targetImg.src = objURL; await targetImg.decode?.(); }
   }catch{}
 }
-
-/* buffer two cards */
 function renderBuffer(i){
   if(!stage.querySelector('.card.current')){
     const c = makeCard(state.items[i]); c.classList.add('current'); stage.appendChild(c);
@@ -283,7 +312,7 @@ function renderBuffer(i){
   }
 }
 
-/* load */
+/* ---------- flow ---------- */
 async function loadYear(){
   state.market = document.getElementById('market').value || 'US/en';
   state.year = Number(document.getElementById('year').value);
@@ -301,7 +330,6 @@ async function loadYear(){
   state.items = data.filter(it=>it && it.url && it.date && new Date(it.date).getFullYear()===state.year);
   if(state.items.length===0){ stage.innerHTML = `<div class="pill">No images for ${state.market} ${state.year}.</div>`; loadBtn.disabled=false; return; }
 
-  // resume session
   const sess = loadSession(state.market, state.year);
   if(sess){
     state.idx = Math.min(sess.idx||0, state.items.length-1);
@@ -313,11 +341,10 @@ async function loadYear(){
   cacheAll();
   startNowBtn.onclick = ()=>{ overlay.style.display='none'; if(!stage.querySelector('.card')) startGame(); };
   if(!sess){ overlay.style.display='flex'; } else { startGame(); }
-  loadBtn.disabled = false;
+  loadBtn.disabled=false;
 }
 function startGame(){ stage.innerHTML=''; renderBuffer(state.idx); updateCounters(); saveSession(); }
 
-/* next / swipe / undo / reload */
 function nextCard(){
   state.idx++; updateCounters(); saveSession();
   const cur = stage.querySelector('.card.current'); if(cur) cur.remove();
@@ -335,19 +362,15 @@ function swipe(card, dir){
   setTimeout(()=>{ nextCard(); }, 220);
   updateCounters();
 }
-undoBtn.onclick = ()=>{
+document.getElementById('undo').onclick = ()=>{
   const last = state.history.pop(); if(!last) return;
   state.idx = Math.max(0, state.idx-1);
   if(last.action==='save'){ state.saved.delete(last.url); } else { state.skipped.delete(last.url); }
   saveSession(); stage.innerHTML=''; renderBuffer(state.idx); updateCounters();
 };
-reloadBtn.onclick = async ()=>{
-  const it = state.items[state.idx]; if(!it) return;
-  const img = stage.querySelector('.card.current img'); await hardReload(it.url, img);
-};
 
-/* review */
-reviewBtn.onclick = ()=>{ buildReview(); rev.style.display='flex'; };
+/* ---------- review ---------- */
+document.getElementById('review').onclick = ()=>{ buildReview(); rev.style.display='flex'; };
 closeRevBtn.onclick = ()=>{ rev.style.display='none'; saveSession(); updateCounters(); };
 function buildReview(){
   gridSaved.innerHTML=''; gridSkipped.innerHTML='';
@@ -364,7 +387,24 @@ function buildReview(){
   for(const u of Array.from(state.skipped)) gridSkipped.appendChild(mk(u,'skipped'));
 }
 
-/* drag */
+/* ---------- download ZIP (uses cached blobs; proxy on first fetch) ---------- */
+async function downloadZip(){
+  if(state.saved.size===0) return;
+  const zip = new JSZip(); const folder = zip.folder('bing-selected'); const batch=8;
+  const sel = state.items.filter(it=>state.saved.has(it.url));
+  for(let i=0;i<sel.length;i+=batch){
+    await Promise.all(sel.slice(i,i+batch).map(async (item,idx)=>{
+      const nameDate = (item.date||'').replaceAll('-','');
+      const ext=(item.url.split('.').pop()||'jpg').split('?')[0];
+      const fname=`${nameDate || String(i+idx).padStart(4,'0')}-${sanitize(item.title||'bing')}.${ext}`;
+      try{ const {blob}=await getFromCache(item.url); folder.file(fname, blob); }
+      catch{ folder.file(`${fname}.txt`, `Failed to get image. Direct link:\n${item.url}`); }
+    }));
+  }
+  const blob = await zip.generateAsync({type:'blob'}); saveAs(blob, `bing-selected-${state.market.replace('/','-')}-${state.year}.zip`);
+}
+
+/* ---------- drag ---------- */
 function enableDrag(card){
   let startX=0,startY=0,drag=false;
   const saveB = card.querySelector('.badge.save'), passB = card.querySelector('.badge.pass');
@@ -377,25 +417,10 @@ function enableDrag(card){
   card.addEventListener('touchstart',e=>down(e),{passive:true}); card.addEventListener('touchmove',e=>move(e),{passive:true}); card.addEventListener('touchend',e=>up(e));
 }
 
-/* ZIP from cache */
-async function downloadZip(){
-  if(state.saved.size===0) return;
-  const zip = new JSZip(); const folder = zip.folder('bing-selected'); const batch=8;
-  const sel = state.items.filter(it=>state.saved.has(it.url));
-  for(let i=0;i<sel.length;i+=batch){
-    await Promise.all(sel.slice(i,i+batch).map(async (item,idx)=>{
-      const nameDate = (item.date||'').replaceAll('-',''); const ext=(item.url.split('.').pop()||'jpg').split('?')[0];
-      const fname=`${nameDate || String(i+idx).padStart(4,'0')}-${sanitize(item.title||'bing')}.${ext}`;
-      try{ const {blob}=await getFromCache(item.url); folder.file(fname, blob); }
-      catch{ folder.file(`${fname}.txt`, `Failed to get image. Direct link:\n${item.url}`); }
-    }));
-  }
-  const blob = await zip.generateAsync({type:'blob'}); saveAs(blob, `bing-selected-${state.market.replace('/','-')}-${state.year}.zip`);
-}
-
-/* wire */
+/* ---------- wire ---------- */
 passBtn.onclick = ()=>{ const c = stage.querySelector('.card.current'); if(c) swipe(c,-1); };
 saveBtn.onclick = ()=>{ const c = stage.querySelector('.card.current'); if(c) swipe(c,+1); };
+reloadBtn.onclick = async ()=>{ const it=state.items[state.idx]; const img=stage.querySelector('.card.current img'); if(it&&img) await hardReload(it.url,img); };
 dlBtn.onclick = downloadZip;
 clearBtn.onclick = ()=>{ state.saved.clear(); saveSession(); updateCounters(); };
 loadBtn.onclick = loadYear;
@@ -404,17 +429,17 @@ document.addEventListener('keydown', e=>{
   if(passBtn.disabled) return;
   if(e.key==='ArrowLeft') passBtn.click();
   if(e.key==='ArrowRight') saveBtn.click();
-  if(e.key.toLowerCase()==='z' && (e.ctrlKey||e.metaKey)) undoBtn.click();
+  if(e.key.toLowerCase()==='z' && (e.ctrlKey||e.metaKey)) document.getElementById('undo').click();
 });
 document.addEventListener('visibilitychange', ()=>{
   if(document.visibilityState==='visible'){
     const it = state.items[state.idx]; const img = stage.querySelector('.card.current img');
-    if(it && img){ img.src = srcFor(it.url); }
+    if(it && img){ img.src = state.objUrls.get(it.url) || it.url; }
   }
 });
 updateCounters();
 
-/* auto-resume */
+/* ---------- auto-resume last session ---------- */
 (function autoResume(){
   const raw = localStorage.getItem(LS_KEY); if(!raw) return;
   try{ const db = JSON.parse(raw)||{}; const keys = Object.keys(db); if(keys.length===0) return;
