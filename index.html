@@ -22,12 +22,12 @@
   button.ghost{background:transparent}
   button:disabled{opacity:.5;cursor:not-allowed}
   #stage{position:relative;flex:1;overflow:hidden;display:grid;place-items:center;padding:10px}
-  .card{position:absolute;inset:auto;max-width:min(900px,95vw);max-height:calc(100% - 160px);aspect-ratio:16/9;background:var(--card);border:1px solid #273042;border-radius:14px;box-shadow:0 10px 30px rgba(0,0,0,.5);display:flex;flex-direction:column;overflow:hidden;touch-action:pan-y}
-  .imgwrap{position:relative;flex:1;background:#000}
+  .card{position:absolute;inset:auto;width:min(900px,95vw);background:var(--card);border:1px solid #273042;border-radius:14px;box-shadow:0 10px 30px rgba(0,0,0,.5);display:flex;flex-direction:column;overflow:hidden;touch-action:pan-y}
+  .imgwrap{position:relative;width:100%;aspect-ratio:16/9;background:#000}
   .imgwrap img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
-  .caption{padding:10px 12px;background:rgba(10,12,16,.88);border-top:1px solid #273042}
-  .cap-title{font-weight:600}
-  .cap-meta{color:var(--sub);font-size:12px;margin-top:2px}
+  .caption{padding:10px 12px;background:rgba(10,12,16,.88);border-top:1px solid #273042;min-height:64px}
+  .cap-title{font-weight:600;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+  .cap-meta{color:var(--sub);font-size:12px;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .meta{padding:8px 12px;background:rgba(10,12,16,.8);display:flex;gap:8px;align-items:center;flex-wrap:wrap;border-top:1px solid #273042}
   .controls{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-left:auto}
   .pill{padding:2px 8px;border-radius:999px;border:1px solid #2a3242}
@@ -36,13 +36,11 @@
   .badge{position:absolute;top:14px;font-weight:900;font-size:22px;padding:6px 10px;border-radius:8px;border:3px solid;transform:rotate(-10deg);opacity:0;z-index:2}
   .badge.save{left:14px;color:#d7ffe3;border-color:var(--ok);background:rgba(56,193,114,.12)}
   .badge.pass{right:14px;color:#ffd6d6;border-color:var(--no);background:rgba(227,52,47,.12);transform:rotate(10deg)}
-  /* overlay */
   .overlay{position:fixed;inset:0;background:rgba(10,12,16,.92);display:none;align-items:center;justify-content:center;z-index:5}
   .box{width:min(680px,94vw);max-height:90vh;overflow:auto;background:#131823;border:1px solid #2a3242;border-radius:12px;padding:18px}
   #bar{height:10px;background:#0f131a;border:1px solid #2a3242;border-radius:999px;overflow:hidden;margin-top:10px}
   #bar>i{display:block;height:100%;width:0;background:var(--accent)}
   #pct{font-variant-numeric:tabular-nums}
-  /* review modal */
   .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:8px;margin-top:12px}
   .thumb{position:relative;border:1px solid #2a3242;border-radius:8px;overflow:hidden;background:#000}
   .thumb img{width:100%;height:100%;object-fit:cover;display:block}
@@ -63,6 +61,7 @@
   <button id="load" class="primary">Load</button>
   <span id="queueInfo" class="pill">0 loaded</span>
   <div style="margin-left:auto;display:flex;gap:8px;flex-wrap:wrap">
+    <button id="reload" class="ghost" disabled>Reload image (R)</button>
     <button id="undo" class="ghost" disabled>Undo</button>
     <button id="review" class="ghost" disabled>Review/Edit</button>
     <button id="download" class="good" disabled>Download ZIP (0)</button>
@@ -77,10 +76,10 @@
     <button id="passBtn" class="bad" disabled>Pass</button>
     <button id="saveBtn" class="good" disabled>Save</button>
   </div>
-  <div style="font-size:12px;color:var(--sub)">Captions show title and copyright. Progress is saved locally and resumes after refresh.</div>
+  <div style="font-size:12px;color:var(--sub)">Consistent 16:9 frame. Captions include title and copyright. Progress persists locally.</div>
 </footer>
 
-<!-- Preload/caching overlay -->
+<!-- Caching overlay -->
 <div id="pre" class="overlay">
   <div class="box">
     <div style="display:flex;justify-content:space-between;align-items:end;gap:8px">
@@ -89,15 +88,16 @@
     </div>
     <div id="bar"><i></i></div>
     <div id="hint" style="margin-top:8px;color:var(--sub);font-size:13px">
-      You can start anytime. Caching continues in the background.
+      Accurate progress counts only decoded images. Failures are retried.
     </div>
     <div style="margin-top:10px;display:flex;gap:8px">
       <button id="startNow" class="primary">Start now</button>
+      <span id="failTxt" class="pill">failed: 0</span>
     </div>
   </div>
 </div>
 
-<!-- Review/edit modal -->
+<!-- Review modal -->
 <div id="rev" class="overlay">
   <div class="box">
     <div style="display:flex;justify-content:space-between;align-items:center">
@@ -121,7 +121,7 @@ function marketApiURL(market){
   ];
 }
 
-/* years drop-down 2010..current */
+/* years: 2010..min(2025, current) */
 (function initYears(){
   const sel = document.getElementById('year');
   const nowY = new Date().getFullYear();
@@ -135,23 +135,17 @@ function marketApiURL(market){
 const state = {
   items: [], idx: 0,
   saved: new Set(), skipped: new Set(),
-  history: [], // for undo [{url, action}]
+  history: [],
   cacheName: 'bing-wallpapers-v1',
-  objUrls: new Map(), // url -> objectURL
+  objUrls: new Map(),
   market: 'US/en', year: new Date().getFullYear()
 };
-const LS_KEY = 'bwp_sessions'; // map { "<market>|<year>": {saved:[url], skipped:[url], idx:n} }
-
+const LS_KEY = 'bwp_sessions';
 function sessionKey(m,y){ return `${m}|${y}`; }
-function loadSession(m,y){
-  const raw = localStorage.getItem(LS_KEY); if(!raw) return null;
-  try{ const db=JSON.parse(raw)||{}; return db[sessionKey(m,y)]||null; }catch{return null}
-}
+function loadSession(m,y){ try{ return (JSON.parse(localStorage.getItem(LS_KEY)||'{}'))[sessionKey(m,y)]||null }catch{return null} }
 function saveSession(){
-  const raw = localStorage.getItem(LS_KEY); let db={}; try{ db=JSON.parse(raw)||{} }catch{}
-  db[sessionKey(state.market,state.year)] = {
-    saved: Array.from(state.saved), skipped: Array.from(state.skipped), idx: state.idx
-  };
+  let db={}; try{ db=JSON.parse(localStorage.getItem(LS_KEY)||'{}') }catch{}
+  db[sessionKey(state.market,state.year)] = {saved:[...state.saved], skipped:[...state.skipped], idx: state.idx};
   localStorage.setItem(LS_KEY, JSON.stringify(db));
 }
 
@@ -160,17 +154,17 @@ const stage = document.getElementById('stage');
 const loadBtn = document.getElementById('load');
 const passBtn = document.getElementById('passBtn');
 const saveBtn = document.getElementById('saveBtn');
+const reloadBtn = document.getElementById('reload');
 const dlBtn = document.getElementById('download');
 const clearBtn= document.getElementById('clear');
 const queueInfo = document.getElementById('queueInfo');
 const undoBtn = document.getElementById('undo');
 const reviewBtn = document.getElementById('review');
-
 const overlay = document.getElementById('pre');
 const startNowBtn = document.getElementById('startNow');
 const pctEl = document.getElementById('pct');
 const barEl = document.querySelector('#bar>i');
-
+const failTxt = document.getElementById('failTxt');
 const rev = document.getElementById('rev');
 const closeRevBtn = document.getElementById('closeRev');
 const gridSaved = document.getElementById('gridSaved');
@@ -186,11 +180,11 @@ function updateCounters(){
   const any = state.saved.size>0;
   dlBtn.disabled = !any; clearBtn.disabled = !any;
   const canAct = state.items.length>0 && state.idx<state.items.length;
-  passBtn.disabled = !canAct; saveBtn.disabled = !canAct; undoBtn.disabled = state.history.length===0;
+  passBtn.disabled = !canAct; saveBtn.disabled = !canAct; reloadBtn.disabled = !canAct; undoBtn.disabled = state.history.length===0;
   reviewBtn.disabled = state.items.length===0;
 }
 
-/* Cache helpers */
+/* cache helpers */
 async function getFromCache(url){
   const cache = await caches.open(state.cacheName);
   const req = new Request(url, {mode:'no-cors'});
@@ -207,17 +201,30 @@ async function getFromCache(url){
   return {blob, objURL: obj};
 }
 
-/* background caching with progress; can be hidden */
+/* accurate caching with retries; progress = decoded successes */
 async function cacheAll(){
   overlay.style.display = 'flex';
   const total = state.items.length;
-  pctEl.textContent = `0/${total}`; barEl.style.width = '0%';
-  let done = 0, i = 0;
+  pctEl.textContent = `0/${total}`; barEl.style.width = '0%'; failTxt.textContent = 'failed: 0';
+
+  let success = 0, failed = 0, i = 0;
   const concurrency = 10;
   async function work(idx){
     const it = state.items[idx]; if(!it) return;
-    try{ const {objURL}=await getFromCache(it.url); const im=new Image(); im.decoding='async'; im.src=objURL; try{ await im.decode(); }catch{} }catch{}
-    done++; pctEl.textContent=`${done}/${total}`; barEl.style.width = `${Math.round(done/total*100)}%`;
+    let attempts = 0;
+    while(attempts < 3){
+      attempts++;
+      try{
+        const {objURL}=await getFromCache(it.url);
+        const im=new Image(); im.decoding='async'; im.src=objURL;
+        await im.decode(); // count only fully decoded images
+        success++; break;
+      }catch{
+        if(attempts>=3){ failed++; break; }
+        await new Promise(r=>setTimeout(r, 300*attempts));
+      }
+    }
+    pctEl.textContent=`${success}/${total}`; barEl.style.width = `${Math.round(success/total*100)}%`; failTxt.textContent = `failed: ${failed}`;
   }
   function nextIndex(){ return i < total ? i++ : null; }
   const workers = Array.from({length: Math.min(concurrency,total)}, async ()=>{
@@ -226,7 +233,7 @@ async function cacheAll(){
   Promise.all(workers).finally(()=>{ overlay.style.display='none'; });
 }
 
-/* card building (with caption) */
+/* build card with caption and robust error recovery */
 function makeCard(item){
   const card = document.createElement('div');
   card.className = 'card';
@@ -246,15 +253,27 @@ function makeCard(item){
       </div>
     </div>`;
   const img = card.querySelector('img');
-  const obj = state.objUrls.get(item.url);
-  img.src = obj || item.url;
-
+  const use = srcFor(item.url); img.src = use;
+  img.onerror = async ()=>{ await hardReload(item.url, img); };
   const [bPass,bSave] = card.querySelectorAll('.controls button');
   bPass.onclick = ()=> swipe(card, -1);
   bSave.onclick = ()=> swipe(card, +1);
   enableDrag(card);
   return card;
 }
+function srcFor(url){ return state.objUrls.get(url) || url; }
+async function hardReload(url, targetImg){
+  try{
+    // force-refresh cache entry and object URL
+    const cache = await caches.open(state.cacheName);
+    const req = new Request(url, {mode:'no-cors'});
+    await cache.delete(req);
+    const {objURL} = await getFromCache(url);
+    if(targetImg){ targetImg.src = objURL; await targetImg.decode?.(); }
+  }catch{}
+}
+
+/* buffer two cards */
 function renderBuffer(i){
   if(!stage.querySelector('.card.current')){
     const c = makeCard(state.items[i]); c.classList.add('current'); stage.appendChild(c);
@@ -264,7 +283,7 @@ function renderBuffer(i){
   }
 }
 
-/* load year and resume if present */
+/* load */
 async function loadYear(){
   state.market = document.getElementById('market').value || 'US/en';
   state.year = Number(document.getElementById('year').value);
@@ -282,7 +301,7 @@ async function loadYear(){
   state.items = data.filter(it=>it && it.url && it.date && new Date(it.date).getFullYear()===state.year);
   if(state.items.length===0){ stage.innerHTML = `<div class="pill">No images for ${state.market} ${state.year}.</div>`; loadBtn.disabled=false; return; }
 
-  // resume saved session if exists
+  // resume session
   const sess = loadSession(state.market, state.year);
   if(sess){
     state.idx = Math.min(sess.idx||0, state.items.length-1);
@@ -290,18 +309,15 @@ async function loadYear(){
     for(const u of (sess.skipped||[])) state.skipped.add(u);
   }
 
-  // start caching in background and allow immediate start
   await caches.open(state.cacheName);
   cacheAll();
   startNowBtn.onclick = ()=>{ overlay.style.display='none'; if(!stage.querySelector('.card')) startGame(); };
-  if(!sess){ overlay.style.display='flex'; } else { // resume immediately
-    startGame();
-  }
+  if(!sess){ overlay.style.display='flex'; } else { startGame(); }
   loadBtn.disabled = false;
 }
 function startGame(){ stage.innerHTML=''; renderBuffer(state.idx); updateCounters(); saveSession(); }
 
-/* swipe + undo */
+/* next / swipe / undo / reload */
 function nextCard(){
   state.idx++; updateCounters(); saveSession();
   const cur = stage.querySelector('.card.current'); if(cur) cur.remove();
@@ -315,25 +331,24 @@ function swipe(card, dir){
   const item = state.items[state.idx]; if(!item) return;
   if(dir>0){ state.saved.add(item.url); state.skipped.delete(item.url); card.querySelector('.badge.save').style.opacity = 1; state.history.push({url:item.url,action:'save'}); }
   else { state.skipped.add(item.url); state.saved.delete(item.url); card.querySelector('.badge.pass').style.opacity = 1; state.history.push({url:item.url,action:'pass'}); }
-  dlBtn.textContent = `Download ZIP (${state.saved.size})`; dlBtn.disabled = state.saved.size===0 ? true : false; clearBtn.disabled = state.saved.size===0;
+  dlBtn.textContent = `Download ZIP (${state.saved.size})`; dlBtn.disabled = state.saved.size===0; clearBtn.disabled = state.saved.size===0;
   setTimeout(()=>{ nextCard(); }, 220);
   updateCounters();
 }
 undoBtn.onclick = ()=>{
   const last = state.history.pop(); if(!last) return;
-  // move idx back one card if we can
   state.idx = Math.max(0, state.idx-1);
-  if(last.action==='save'){ state.saved.delete(last.url); }
-  else { state.skipped.delete(last.url); }
-  saveSession();
-  // rebuild current/next cards
-  stage.innerHTML=''; renderBuffer(state.idx); updateCounters();
+  if(last.action==='save'){ state.saved.delete(last.url); } else { state.skipped.delete(last.url); }
+  saveSession(); stage.innerHTML=''; renderBuffer(state.idx); updateCounters();
+};
+reloadBtn.onclick = async ()=>{
+  const it = state.items[state.idx]; if(!it) return;
+  const img = stage.querySelector('.card.current img'); await hardReload(it.url, img);
 };
 
-/* review/edit modal */
+/* review */
 reviewBtn.onclick = ()=>{ buildReview(); rev.style.display='flex'; };
 closeRevBtn.onclick = ()=>{ rev.style.display='none'; saveSession(); updateCounters(); };
-
 function buildReview(){
   gridSaved.innerHTML=''; gridSkipped.innerHTML='';
   const mk = (url, where)=>{
@@ -342,11 +357,7 @@ function buildReview(){
     const img=document.createElement('img'); img.src = state.objUrls.get(url) || url; wrap.appendChild(img);
     const tag=document.createElement('div'); tag.className='tag'; tag.textContent = fmtDate(it?.date||''); wrap.appendChild(tag);
     const btn=document.createElement('button'); btn.textContent = where==='saved' ? 'Move to skipped' : 'Move to saved'; wrap.appendChild(btn);
-    btn.onclick=()=>{
-      if(where==='saved'){ state.saved.delete(url); state.skipped.add(url); }
-      else{ state.skipped.delete(url); state.saved.add(url); }
-      saveSession(); buildReview();
-    };
+    btn.onclick=()=>{ if(where==='saved'){ state.saved.delete(url); state.skipped.add(url); } else { state.skipped.delete(url); state.saved.add(url); } saveSession(); buildReview(); };
     return wrap;
   };
   for(const u of Array.from(state.saved)) gridSaved.appendChild(mk(u,'saved'));
@@ -383,26 +394,30 @@ async function downloadZip(){
 }
 
 /* wire */
-document.getElementById('passBtn').onclick = ()=>{ const c = stage.querySelector('.card.current'); if(c) swipe(c,-1); };
-document.getElementById('saveBtn').onclick = ()=>{ const c = stage.querySelector('.card.current'); if(c) swipe(c,+1); };
-document.getElementById('download').onclick = downloadZip;
-document.getElementById('clear').onclick = async ()=>{
-  state.saved.clear(); saveSession(); updateCounters();
-};
-document.getElementById('load').onclick = loadYear;
+passBtn.onclick = ()=>{ const c = stage.querySelector('.card.current'); if(c) swipe(c,-1); };
+saveBtn.onclick = ()=>{ const c = stage.querySelector('.card.current'); if(c) swipe(c,+1); };
+dlBtn.onclick = downloadZip;
+clearBtn.onclick = ()=>{ state.saved.clear(); saveSession(); updateCounters(); };
+loadBtn.onclick = loadYear;
 document.addEventListener('keydown', e=>{
+  if(e.key==='r' || e.key==='R'){ reloadBtn.click(); return; }
   if(passBtn.disabled) return;
-  if(e.key==='ArrowLeft') document.getElementById('passBtn').click();
-  if(e.key==='ArrowRight') document.getElementById('saveBtn').click();
+  if(e.key==='ArrowLeft') passBtn.click();
+  if(e.key==='ArrowRight') saveBtn.click();
   if(e.key.toLowerCase()==='z' && (e.ctrlKey||e.metaKey)) undoBtn.click();
+});
+document.addEventListener('visibilitychange', ()=>{
+  if(document.visibilityState==='visible'){
+    const it = state.items[state.idx]; const img = stage.querySelector('.card.current img');
+    if(it && img){ img.src = srcFor(it.url); }
+  }
 });
 updateCounters();
 
-/* auto-resume last session if present */
+/* auto-resume */
 (function autoResume(){
   const raw = localStorage.getItem(LS_KEY); if(!raw) return;
-  try{
-    const db = JSON.parse(raw)||{}; const keys = Object.keys(db); if(keys.length===0) return;
+  try{ const db = JSON.parse(raw)||{}; const keys = Object.keys(db); if(keys.length===0) return;
     const [m,y] = keys[keys.length-1].split('|'); document.getElementById('market').value=m; document.getElementById('year').value=y;
     loadYear();
   }catch{}
