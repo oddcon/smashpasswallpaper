@@ -13,32 +13,42 @@
   body{margin:0;background:var(--bg);color:var(--text);font:16px/1.4 system-ui,Segoe UI,Roboto,Helvetica,Arial,sans-serif;display:flex;flex-direction:column}
   header{padding:12px 16px;display:flex;flex-wrap:wrap;gap:8px;align-items:center;border-bottom:1px solid #1f2430}
   header h1{font-size:16px;margin:0 10px 0 0;white-space:nowrap}
-  label{font-size:13px;color:var(--sub)}
-  input,button{background:#0f131a;color:var(--text);border:1px solid #2a3242;border-radius:8px;padding:8px 10px;font-size:14px}
+  label{font-size:13px;color:var(--sub);display:flex;flex-direction:column;gap:4px}
+  input,select,button{background:#0f131a;color:var(--text);border:1px solid #2a3242;border-radius:8px;padding:8px 10px;font-size:14px}
   button{cursor:pointer}
   button.primary{background:var(--accent);border-color:var(--accent);color:#001225}
   button.good{background:var(--ok);border-color:var(--ok);color:#00150b}
   button.bad{background:var(--no);border-color:var(--no)}
+  button.ghost{background:transparent}
   button:disabled{opacity:.5;cursor:not-allowed}
   #stage{position:relative;flex:1;overflow:hidden;display:grid;place-items:center;padding:10px}
-  .card{position:absolute;inset:auto;max-width:min(900px,95vw);max-height:calc(100% - 140px);aspect-ratio:16/9;background:var(--card);border:1px solid #273042;border-radius:14px;box-shadow:0 10px 30px rgba(0,0,0,.5);display:flex;flex-direction:column;overflow:hidden;touch-action:pan-y}
-  .card img{width:100%;height:100%;object-fit:cover;flex:1;background:#000}
-  .meta{padding:10px 12px;background:rgba(10,12,16,.8);display:flex;gap:10px;align-items:baseline;flex-wrap:wrap}
-  .meta .title{font-weight:600}
-  .meta .date{color:var(--sub);font-size:13px}
+  .card{position:absolute;inset:auto;max-width:min(900px,95vw);max-height:calc(100% - 160px);aspect-ratio:16/9;background:var(--card);border:1px solid #273042;border-radius:14px;box-shadow:0 10px 30px rgba(0,0,0,.5);display:flex;flex-direction:column;overflow:hidden;touch-action:pan-y}
+  .imgwrap{position:relative;flex:1;background:#000}
+  .imgwrap img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+  .caption{padding:10px 12px;background:rgba(10,12,16,.88);border-top:1px solid #273042}
+  .cap-title{font-weight:600}
+  .cap-meta{color:var(--sub);font-size:12px;margin-top:2px}
+  .meta{padding:8px 12px;background:rgba(10,12,16,.8);display:flex;gap:8px;align-items:center;flex-wrap:wrap;border-top:1px solid #273042}
   .controls{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-left:auto}
   .pill{padding:2px 8px;border-radius:999px;border:1px solid #2a3242}
   #queueInfo{font-size:12px;color:var(--sub)}
   footer{padding:10px 12px;border-top:1px solid #1f2430;display:flex;gap:8px;flex-wrap:wrap;justify-content:space-between}
-  .badge{position:absolute;top:14px;font-weight:900;font-size:22px;padding:6px 10px;border-radius:8px;border:3px solid;transform:rotate(-10deg);opacity:0}
+  .badge{position:absolute;top:14px;font-weight:900;font-size:22px;padding:6px 10px;border-radius:8px;border:3px solid;transform:rotate(-10deg);opacity:0;z-index:2}
   .badge.save{left:14px;color:#d7ffe3;border-color:var(--ok);background:rgba(56,193,114,.12)}
   .badge.pass{right:14px;color:#ffd6d6;border-color:var(--no);background:rgba(227,52,47,.12);transform:rotate(10deg)}
   /* overlay */
-  #pre{position:fixed;inset:0;background:rgba(10,12,16,.92);display:none;align-items:center;justify-content:center;z-index:5}
-  #box{width:min(520px,92vw);background:#131823;border:1px solid #2a3242;border-radius:12px;padding:18px}
+  .overlay{position:fixed;inset:0;background:rgba(10,12,16,.92);display:none;align-items:center;justify-content:center;z-index:5}
+  .box{width:min(680px,94vw);max-height:90vh;overflow:auto;background:#131823;border:1px solid #2a3242;border-radius:12px;padding:18px}
   #bar{height:10px;background:#0f131a;border:1px solid #2a3242;border-radius:999px;overflow:hidden;margin-top:10px}
   #bar>i{display:block;height:100%;width:0;background:var(--accent)}
   #pct{font-variant-numeric:tabular-nums}
+  /* review modal */
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:8px;margin-top:12px}
+  .thumb{position:relative;border:1px solid #2a3242;border-radius:8px;overflow:hidden;background:#000}
+  .thumb img{width:100%;height:100%;object-fit:cover;display:block}
+  .thumb .tag{position:absolute;bottom:6px;left:6px;font-size:11px;padding:2px 6px;border-radius:999px;background:rgba(0,0,0,.55);border:1px solid #2a3242}
+  .thumb button{position:absolute;top:6px;right:6px}
+  @media (max-width:640px){ header{gap:6px} .caption{font-size:14px} }
 </style>
 </head>
 <body>
@@ -48,39 +58,56 @@
     <input id="market" value="US/en" placeholder="US/en or ROW/en" />
   </label>
   <label>Year
-    <input id="year" type="number" min="2009" max="2100" value="2024" />
-  </label>
-  <label>Start after
-    <input id="threshold" type="number" min="1" max="366" value="24" />
+    <select id="year"></select>
   </label>
   <button id="load" class="primary">Load</button>
   <span id="queueInfo" class="pill">0 loaded</span>
-  <div style="margin-left:auto;display:flex;gap:8px">
+  <div style="margin-left:auto;display:flex;gap:8px;flex-wrap:wrap">
+    <button id="undo" class="ghost" disabled>Undo</button>
+    <button id="review" class="ghost" disabled>Review/Edit</button>
     <button id="download" class="good" disabled>Download ZIP (0)</button>
     <button id="clear" class="bad" disabled>Clear Saved</button>
   </div>
 </header>
 
-<div id="stage"><div class="pill">Choose a year and Load. The app will cache wallpapers in the background.</div></div>
+<div id="stage"><div class="pill">Choose year and Load. Caching continues in background.</div></div>
 
 <footer>
   <div style="display:flex;gap:8px">
     <button id="passBtn" class="bad" disabled>Pass</button>
     <button id="saveBtn" class="good" disabled>Save</button>
   </div>
-  <div style="font-size:12px;color:var(--sub)">Images cached in the browser. Close tab to release memory; cache persists until cleared.</div>
+  <div style="font-size:12px;color:var(--sub)">Captions show title and copyright. Progress is saved locally and resumes after refresh.</div>
 </footer>
 
-<div id="pre">
-  <div id="box">
+<!-- Preload/caching overlay -->
+<div id="pre" class="overlay">
+  <div class="box">
     <div style="display:flex;justify-content:space-between;align-items:end;gap:8px">
       <div style="font-weight:600">Caching wallpapers…</div>
       <div id="pct" class="pill">0/0</div>
     </div>
     <div id="bar"><i></i></div>
     <div id="hint" style="margin-top:8px;color:var(--sub);font-size:13px">
-      Starts automatically after the threshold is ready. Continues caching in background.
+      You can start anytime. Caching continues in the background.
     </div>
+    <div style="margin-top:10px;display:flex;gap:8px">
+      <button id="startNow" class="primary">Start now</button>
+    </div>
+  </div>
+</div>
+
+<!-- Review/edit modal -->
+<div id="rev" class="overlay">
+  <div class="box">
+    <div style="display:flex;justify-content:space-between;align-items:center">
+      <div style="font-weight:600">Review selections</div>
+      <button id="closeRev">Close</button>
+    </div>
+    <div style="margin-top:10px">Saved</div>
+    <div id="gridSaved" class="grid"></div>
+    <div style="margin-top:14px">Skipped</div>
+    <div id="gridSkipped" class="grid"></div>
   </div>
 </div>
 
@@ -94,12 +121,39 @@ function marketApiURL(market){
   ];
 }
 
-/* state */
+/* years drop-down 2010..current */
+(function initYears(){
+  const sel = document.getElementById('year');
+  const nowY = new Date().getFullYear();
+  for(let y=2010;y<=Math.min(2025, nowY);y++){
+    const o=document.createElement('option'); o.value=String(y); o.textContent=String(y);
+    if(y===nowY) o.selected=true; sel.appendChild(o);
+  }
+})();
+
+/* state + persistence */
 const state = {
-  items: [], idx: 0, saved: [],
+  items: [], idx: 0,
+  saved: new Set(), skipped: new Set(),
+  history: [], // for undo [{url, action}]
   cacheName: 'bing-wallpapers-v1',
-  objUrls: new Map() // url -> objectURL
+  objUrls: new Map(), // url -> objectURL
+  market: 'US/en', year: new Date().getFullYear()
 };
+const LS_KEY = 'bwp_sessions'; // map { "<market>|<year>": {saved:[url], skipped:[url], idx:n} }
+
+function sessionKey(m,y){ return `${m}|${y}`; }
+function loadSession(m,y){
+  const raw = localStorage.getItem(LS_KEY); if(!raw) return null;
+  try{ const db=JSON.parse(raw)||{}; return db[sessionKey(m,y)]||null; }catch{return null}
+}
+function saveSession(){
+  const raw = localStorage.getItem(LS_KEY); let db={}; try{ db=JSON.parse(raw)||{} }catch{}
+  db[sessionKey(state.market,state.year)] = {
+    saved: Array.from(state.saved), skipped: Array.from(state.skipped), idx: state.idx
+  };
+  localStorage.setItem(LS_KEY, JSON.stringify(db));
+}
 
 /* els */
 const stage = document.getElementById('stage');
@@ -107,27 +161,36 @@ const loadBtn = document.getElementById('load');
 const passBtn = document.getElementById('passBtn');
 const saveBtn = document.getElementById('saveBtn');
 const dlBtn = document.getElementById('download');
-const clearBtn = document.getElementById('clear');
+const clearBtn= document.getElementById('clear');
 const queueInfo = document.getElementById('queueInfo');
+const undoBtn = document.getElementById('undo');
+const reviewBtn = document.getElementById('review');
+
 const overlay = document.getElementById('pre');
+const startNowBtn = document.getElementById('startNow');
 const pctEl = document.getElementById('pct');
 const barEl = document.querySelector('#bar>i');
 
+const rev = document.getElementById('rev');
+const closeRevBtn = document.getElementById('closeRev');
+const gridSaved = document.getElementById('gridSaved');
+const gridSkipped = document.getElementById('gridSkipped');
+
 /* utils */
 function fmtDate(s){ try{ return new Date(s).toISOString().slice(0,10) }catch{ return s||'' } }
-function escapeHtml(s){ return String(s).replace(/[&<>"']/g, c=>({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]))}
+function esc(s){ return String(s).replace(/[&<>"']/g, c=>({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]))}
 function sanitize(s){ return s.replace(/[\\/:*?"<>|]/g,'').replace(/\s+/g,' ').trim().slice(0,120) }
 function updateCounters(){
   queueInfo.textContent = `${state.items.length} loaded · ${state.idx}/${state.items.length} viewed`;
-  dlBtn.textContent = `Download ZIP (${state.saved.length})`;
-  const any = state.saved.length>0;
+  dlBtn.textContent = `Download ZIP (${state.saved.size})`;
+  const any = state.saved.size>0;
   dlBtn.disabled = !any; clearBtn.disabled = !any;
   const canAct = state.items.length>0 && state.idx<state.items.length;
-  passBtn.disabled = !canAct; saveBtn.disabled = !canAct;
+  passBtn.disabled = !canAct; saveBtn.disabled = !canAct; undoBtn.disabled = state.history.length===0;
+  reviewBtn.disabled = state.items.length===0;
 }
 
-/* get Blob for an image from CacheStorage; if missing, fetch and store */
-/* returns objectURL for instant <img> and the Blob for ZIP use */
+/* Cache helpers */
 async function getFromCache(url){
   const cache = await caches.open(state.cacheName);
   const req = new Request(url, {mode:'no-cors'});
@@ -144,49 +207,39 @@ async function getFromCache(url){
   return {blob, objURL: obj};
 }
 
-/* full-year caching with concurrency; starts game after N ready */
-async function cacheAll(threshold){
+/* background caching with progress; can be hidden */
+async function cacheAll(){
   overlay.style.display = 'flex';
   const total = state.items.length;
   pctEl.textContent = `0/${total}`; barEl.style.width = '0%';
-
-  let done = 0, started = false, i = 0;
-  const concurrency = 10; // tune for network
+  let done = 0, i = 0;
+  const concurrency = 10;
   async function work(idx){
     const it = state.items[idx]; if(!it) return;
-    try{
-      const {objURL} = await getFromCache(it.url);
-      // decode once to ensure instant paint later
-      const img = new Image(); img.decoding='async'; img.src = objURL;
-      try{ await img.decode(); }catch{}
-    }catch{}
-    done++;
-    pctEl.textContent = `${done}/${total}`;
-    barEl.style.width = `${Math.round(done/total*100)}%`;
-    if(!started && done >= Math.min(threshold,total)){
-      started = true; overlay.style.display = 'none'; startGame();
-    }
+    try{ const {objURL}=await getFromCache(it.url); const im=new Image(); im.decoding='async'; im.src=objURL; try{ await im.decode(); }catch{} }catch{}
+    done++; pctEl.textContent=`${done}/${total}`; barEl.style.width = `${Math.round(done/total*100)}%`;
   }
   function nextIndex(){ return i < total ? i++ : null; }
   const workers = Array.from({length: Math.min(concurrency,total)}, async ()=>{
     while(true){ const n = nextIndex(); if(n===null) break; await work(n); }
   });
-  await Promise.all(workers);
-  overlay.style.display = 'none';
-  if(!started) startGame();
+  Promise.all(workers).finally(()=>{ overlay.style.display='none'; });
 }
 
-/* build cards using cached object URLs */
+/* card building (with caption) */
 function makeCard(item){
   const card = document.createElement('div');
   card.className = 'card';
   card.innerHTML = `
     <div class="badge save">SAVE</div>
     <div class="badge pass">PASS</div>
-    <img alt="" fetchpriority="high" decoding="async" referrerpolicy="no-referrer">
+    <div class="imgwrap"><img alt="" fetchpriority="high" decoding="async" referrerpolicy="no-referrer"></div>
+    <div class="caption">
+      <div class="cap-title">${esc(item.title||'(no title)')}</div>
+      <div class="cap-meta">${fmtDate(item.date)} · ${esc(item.copyright||'© Bing/owners')}</div>
+    </div>
     <div class="meta">
-      <div class="title">${escapeHtml(item.title||'(no title)')}</div>
-      <div class="date">${fmtDate(item.date)}</div>
+      <span class="pill">${state.market}</span>
       <div class="controls">
         <button class="bad">Pass</button>
         <button class="good">Save</button>
@@ -207,66 +260,97 @@ function renderBuffer(i){
     const c = makeCard(state.items[i]); c.classList.add('current'); stage.appendChild(c);
   }
   if(state.items[i+1] && !stage.querySelector('.card.next')){
-    const n = makeCard(state.items[i+1]); n.classList.add('next');
-    n.style.opacity=0; n.style.pointerEvents='none'; stage.appendChild(n);
+    const n = makeCard(state.items[i+1]); n.classList.add('next'); n.style.opacity=0; n.style.pointerEvents='none'; stage.appendChild(n);
   }
 }
 
-/* flow */
+/* load year and resume if present */
 async function loadYear(){
-  const y = Number(document.getElementById('year').value);
-  const market = document.getElementById('market').value || 'US/en';
-  const thr = Math.max(1, Number(document.getElementById('threshold').value)||24);
+  state.market = document.getElementById('market').value || 'US/en';
+  state.year = Number(document.getElementById('year').value);
   stage.innerHTML = '';
-  state.items = []; state.idx = 0; state.saved = [];
+  state.items = []; state.idx = 0; state.saved.clear(); state.skipped.clear(); state.history.length=0;
   updateCounters(); loadBtn.disabled = true;
 
-  // get API json
   let data, lastErr;
-  for(const u of marketApiURL(market)){
+  for(const u of marketApiURL(state.market)){
     try{ const r = await fetch(u, {mode:'cors', cache:'no-cache'}); if(!r.ok) throw new Error(`HTTP ${r.status}`); data = await r.json(); break; }
     catch(e){ lastErr = e; }
   }
   if(!data){ stage.innerHTML = `<div class="pill" style="color:#ffb3b3">Load failed. ${lastErr?lastErr.message:''}</div>`; loadBtn.disabled=false; return; }
-  state.items = data.filter(it=>it && it.url && it.date && new Date(it.date).getFullYear()===y);
-  if(state.items.length===0){ stage.innerHTML = `<div class="pill">No images for ${market} ${y}.</div>`; loadBtn.disabled=false; return; }
 
-  // show storage estimate
-  try{
-    const est = await navigator.storage?.estimate?.();
-    if(est?.quota){ const mb = (est.quota/1024/1024).toFixed(0);
-      stage.innerHTML = `<div class="pill">Browser storage quota ≈ ${mb} MB. Caching ${state.items.length} images…</div>`;
-    }
-  }catch{}
+  state.items = data.filter(it=>it && it.url && it.date && new Date(it.date).getFullYear()===state.year);
+  if(state.items.length===0){ stage.innerHTML = `<div class="pill">No images for ${state.market} ${state.year}.</div>`; loadBtn.disabled=false; return; }
 
-  // kick caching; game starts after threshold ready; rest continues in background
-  await caches.open(state.cacheName); // ensure cache exists
-  overlay.style.display = 'flex';
-  pctEl.textContent = `0/${state.items.length}`; barEl.style.width = '0%';
-  cacheAll(thr).finally(()=>{ loadBtn.disabled=false; });
+  // resume saved session if exists
+  const sess = loadSession(state.market, state.year);
+  if(sess){
+    state.idx = Math.min(sess.idx||0, state.items.length-1);
+    for(const u of (sess.saved||[])) state.saved.add(u);
+    for(const u of (sess.skipped||[])) state.skipped.add(u);
+  }
+
+  // start caching in background and allow immediate start
+  await caches.open(state.cacheName);
+  cacheAll();
+  startNowBtn.onclick = ()=>{ overlay.style.display='none'; if(!stage.querySelector('.card')) startGame(); };
+  if(!sess){ overlay.style.display='flex'; } else { // resume immediately
+    startGame();
+  }
+  loadBtn.disabled = false;
 }
-function startGame(){ stage.innerHTML=''; renderBuffer(0); updateCounters(); }
+function startGame(){ stage.innerHTML=''; renderBuffer(state.idx); updateCounters(); saveSession(); }
 
-/* next / swipe */
+/* swipe + undo */
 function nextCard(){
-  state.idx++; updateCounters();
+  state.idx++; updateCounters(); saveSession();
   const cur = stage.querySelector('.card.current'); if(cur) cur.remove();
   const promoted = stage.querySelector('.card.next');
   if(promoted){ promoted.classList.remove('next'); promoted.classList.add('current'); promoted.style.opacity=''; promoted.style.pointerEvents=''; }
   if(state.items[state.idx+1]){
-    const n2 = makeCard(state.items[state.idx+1]);
-    n2.classList.add('next'); n2.style.opacity=0; n2.style.pointerEvents='none'; stage.appendChild(n2);
+    const n2 = makeCard(state.items[state.idx+1]); n2.classList.add('next'); n2.style.opacity=0; n2.style.pointerEvents='none'; stage.appendChild(n2);
   }
 }
 function swipe(card, dir){
-  if(dir>0) card.querySelector('.badge.save').style.opacity = 1;
-  else card.querySelector('.badge.pass').style.opacity = 1;
-  const off = dir>0 ? stage.clientWidth : -stage.clientWidth;
-  card.style.transition = 'transform .25s ease, opacity .25s ease';
-  card.style.transform = `translateX(${off}px) rotate(${dir*12}deg)`; card.style.opacity = '0.2';
-  const current = state.items[state.idx];
-  if(dir>0 && current){ state.saved.push(current); dlBtn.textContent = `Download ZIP (${state.saved.length})`; dlBtn.disabled=false; clearBtn.disabled=false; }
-  setTimeout(()=>{ nextCard(); }, 240);
+  const item = state.items[state.idx]; if(!item) return;
+  if(dir>0){ state.saved.add(item.url); state.skipped.delete(item.url); card.querySelector('.badge.save').style.opacity = 1; state.history.push({url:item.url,action:'save'}); }
+  else { state.skipped.add(item.url); state.saved.delete(item.url); card.querySelector('.badge.pass').style.opacity = 1; state.history.push({url:item.url,action:'pass'}); }
+  dlBtn.textContent = `Download ZIP (${state.saved.size})`; dlBtn.disabled = state.saved.size===0 ? true : false; clearBtn.disabled = state.saved.size===0;
+  setTimeout(()=>{ nextCard(); }, 220);
+  updateCounters();
+}
+undoBtn.onclick = ()=>{
+  const last = state.history.pop(); if(!last) return;
+  // move idx back one card if we can
+  state.idx = Math.max(0, state.idx-1);
+  if(last.action==='save'){ state.saved.delete(last.url); }
+  else { state.skipped.delete(last.url); }
+  saveSession();
+  // rebuild current/next cards
+  stage.innerHTML=''; renderBuffer(state.idx); updateCounters();
+};
+
+/* review/edit modal */
+reviewBtn.onclick = ()=>{ buildReview(); rev.style.display='flex'; };
+closeRevBtn.onclick = ()=>{ rev.style.display='none'; saveSession(); updateCounters(); };
+
+function buildReview(){
+  gridSaved.innerHTML=''; gridSkipped.innerHTML='';
+  const mk = (url, where)=>{
+    const it = state.items.find(x=>x.url===url); const wrap=document.createElement('div');
+    wrap.className='thumb';
+    const img=document.createElement('img'); img.src = state.objUrls.get(url) || url; wrap.appendChild(img);
+    const tag=document.createElement('div'); tag.className='tag'; tag.textContent = fmtDate(it?.date||''); wrap.appendChild(tag);
+    const btn=document.createElement('button'); btn.textContent = where==='saved' ? 'Move to skipped' : 'Move to saved'; wrap.appendChild(btn);
+    btn.onclick=()=>{
+      if(where==='saved'){ state.saved.delete(url); state.skipped.add(url); }
+      else{ state.skipped.delete(url); state.saved.add(url); }
+      saveSession(); buildReview();
+    };
+    return wrap;
+  };
+  for(const u of Array.from(state.saved)) gridSaved.appendChild(mk(u,'saved'));
+  for(const u of Array.from(state.skipped)) gridSkipped.appendChild(mk(u,'skipped'));
 }
 
 /* drag */
@@ -282,35 +366,47 @@ function enableDrag(card){
   card.addEventListener('touchstart',e=>down(e),{passive:true}); card.addEventListener('touchmove',e=>move(e),{passive:true}); card.addEventListener('touchend',e=>up(e));
 }
 
-/* ZIP reuses cached blobs */
+/* ZIP from cache */
 async function downloadZip(){
-  if(state.saved.length===0) return;
-  const zip = new JSZip(); const folder = zip.folder('bing-selected'); const batch = 8;
-  for(let i=0;i<state.saved.length;i+=batch){
-    await Promise.all(state.saved.slice(i,i+batch).map(async (item,idx)=>{
+  if(state.saved.size===0) return;
+  const zip = new JSZip(); const folder = zip.folder('bing-selected'); const batch=8;
+  const sel = state.items.filter(it=>state.saved.has(it.url));
+  for(let i=0;i<sel.length;i+=batch){
+    await Promise.all(sel.slice(i,i+batch).map(async (item,idx)=>{
       const nameDate = (item.date||'').replaceAll('-',''); const ext=(item.url.split('.').pop()||'jpg').split('?')[0];
       const fname=`${nameDate || String(i+idx).padStart(4,'0')}-${sanitize(item.title||'bing')}.${ext}`;
-      try{
-        const {blob} = await getFromCache(item.url); folder.file(fname, blob);
-      }catch{ folder.file(`${fname}.txt`, `Failed to get image. Direct link:\n${item.url}`); }
+      try{ const {blob}=await getFromCache(item.url); folder.file(fname, blob); }
+      catch{ folder.file(`${fname}.txt`, `Failed to get image. Direct link:\n${item.url}`); }
     }));
   }
-  const blob = await zip.generateAsync({type:'blob'}); saveAs(blob, `bing-selected-${Date.now()}.zip`);
+  const blob = await zip.generateAsync({type:'blob'}); saveAs(blob, `bing-selected-${state.market.replace('/','-')}-${state.year}.zip`);
 }
 
 /* wire */
-loadBtn.onclick = loadYear;
-passBtn.onclick = ()=>{ const c = stage.querySelector('.card.current'); if(c) swipe(c,-1); };
-saveBtn.onclick = ()=>{ const c = stage.querySelector('.card.current'); if(c) swipe(c,+1); };
-dlBtn.onclick = downloadZip;
-clearBtn.onclick = async ()=>{
-  state.saved.length=0; updateCounters();
-  // optional: clear cached images too
-  const cache = await caches.open(state.cacheName); const keys = await cache.keys(); for(const k of keys) await cache.delete(k);
-  state.objUrls.forEach(u=>URL.revokeObjectURL(u)); state.objUrls.clear();
+document.getElementById('passBtn').onclick = ()=>{ const c = stage.querySelector('.card.current'); if(c) swipe(c,-1); };
+document.getElementById('saveBtn').onclick = ()=>{ const c = stage.querySelector('.card.current'); if(c) swipe(c,+1); };
+document.getElementById('download').onclick = downloadZip;
+document.getElementById('clear').onclick = async ()=>{
+  state.saved.clear(); saveSession(); updateCounters();
 };
-document.addEventListener('keydown', e=>{ if(passBtn.disabled) return; if(e.key==='ArrowLeft') passBtn.click(); if(e.key==='ArrowRight') saveBtn.click(); });
+document.getElementById('load').onclick = loadYear;
+document.addEventListener('keydown', e=>{
+  if(passBtn.disabled) return;
+  if(e.key==='ArrowLeft') document.getElementById('passBtn').click();
+  if(e.key==='ArrowRight') document.getElementById('saveBtn').click();
+  if(e.key.toLowerCase()==='z' && (e.ctrlKey||e.metaKey)) undoBtn.click();
+});
 updateCounters();
+
+/* auto-resume last session if present */
+(function autoResume(){
+  const raw = localStorage.getItem(LS_KEY); if(!raw) return;
+  try{
+    const db = JSON.parse(raw)||{}; const keys = Object.keys(db); if(keys.length===0) return;
+    const [m,y] = keys[keys.length-1].split('|'); document.getElementById('market').value=m; document.getElementById('year').value=y;
+    loadYear();
+  }catch{}
+})();
 </script>
 </body>
 </html>
